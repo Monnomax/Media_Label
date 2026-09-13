@@ -1,0 +1,8 @@
+{
+    "name": "Media Label",
+    "uuid": "media-label@local",
+    "description": "Відображає обкладинку та інформацію про трек на панелі.",    
+    "settings-schema": "org.gnome.shell.extensions.media-label",
+    "shell-version": ["45", "46", "47", "48", "49", "50"],
+    "url": ""
+}
