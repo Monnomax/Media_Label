@@ -46,20 +46,18 @@ export const CairoRoundedArt = GObject.registerClass(
             this._crossfadeTimerId = null;
             this._crossfadeDuration = 400; // змінено на 400 мс
 
-            // Обкладинка — «острівець» зі своєю власною поведінкою кліків
-            // (відкриває прев'ю). Тому вона МУСИТЬ завжди зупиняти
-            // propagation події вище по дереву (до layout кнопки), незалежно
-            // від того, чи є зараз активна обкладинка — інакше клік/скрол
-            // над artLabel просочувався б до контролів треку в layout.
-            this.connect("button-press-event", () => {
-                return Clutter.EVENT_STOP;
-            });
+            // artLabel залишається окремою інтерактивною зоною: кліки та
+            // прокрутка тут не запускають керування треком на решті кнопки.
+            this.connect("button-press-event", () => Clutter.EVENT_STOP);
 
-            this.connect("button-release-event", (actor, event) => {
-                if (this._indicator && this._indicator._currentArtUrl) {
+            this.connect("button-release-event", (_actor, event) => {
+                if (
+                    event.get_button() === Clutter.BUTTON_PRIMARY &&
+                    this._indicator &&
+                    this._indicator._currentArtUrl
+                ) {
                     const url = this._indicator._currentArtUrl;
                     const settings = this._indicator._settings;
-
                     GLib.timeout_add(GLib.PRIORITY_DEFAULT, 50, () => {
                         new ArtPreview(url, settings);
                         return GLib.SOURCE_REMOVE;
@@ -68,11 +66,7 @@ export const CairoRoundedArt = GObject.registerClass(
                 return Clutter.EVENT_STOP;
             });
 
-            // Скрол над обкладинкою теж не повинен просочуватись до layout
-            // (інакше прокрутка над artLabel запускала б перемотування треку).
-            this.connect("scroll-event", () => {
-                return Clutter.EVENT_STOP;
-            });
+            this.connect("scroll-event", () => Clutter.EVENT_STOP);
 
             // Захист від «зомбі»-таймера: якщо актор знищили посеред анімації,
             // GLib.timeout_add інакше продовжить смикати вже знищений DrawingArea.

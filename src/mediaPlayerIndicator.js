@@ -3,6 +3,7 @@ import * as PanelMenu from "resource:///org/gnome/shell/ui/panelMenu.js";
 import * as PopupMenu from "resource:///org/gnome/shell/ui/popupMenu.js";
 import St from "gi://St";
 import Clutter from "gi://Clutter";
+import Cairo from "gi://cairo";
 import GObject from "gi://GObject";
 import GLib from "gi://GLib";
 import Gio from "gi://Gio";
@@ -30,12 +31,17 @@ export const MediaPlayerIndicator = GObject.registerClass(
             this._currentPlayerAddress = null;
             this._playerProxy = null;
             this._currentArtUrl = null;
+            this._currentTrackKey = null;
 
             // --- Стан сесії візуалізації перемотування (скрол по кнопці) ---
             this._seekActive = false;
             this._seekPositionUnknown = true;
             this._seekPosition = 0;
             this._seekLength = 0;
+            this._panelProgressPosition = 0;
+            this._panelProgressGeometry = null;
+            this._panelProgressTimeoutId = null;
+            this._panelProgressPollInFlight = false;
             this._seekHideTimeoutId = null;
 
             // Змінна для таймера довгого лівого кліку
@@ -70,9 +76,131 @@ export const MediaPlayerIndicator = GObject.registerClass(
             this._trackStack.add_child(this.trackLabel);
             this._trackStack.add_child(this.seekOverlay);
 
+            // Прогрес малюється окремим шаром позаду вмісту кнопки.
+            // Track починається після обкладинки, fill заходить під неї
+            // на половину ширини; сама обкладинка залишається незатіненою.
+            // St.DrawingArea не має дочірніх акторів, тому ширина track/fill
+            // не бере участі в обчисленні natural size кнопки. Це запобігає
+            // накопиченню ширини після кожної зміни треку.
+            this._progressLayer = new St.DrawingArea({
+                x_align: Clutter.ActorAlign.FILL,
+                y_align: Clutter.ActorAlign.FILL,
+                x_expand: true,
+                y_expand: true,
+                reactive: false,
+            });
+            this._progressLayer.connect("repaint", (area) => {
+                const cr = area.get_context();
+                try {
+                    // Повністю очищаємо попередній кадр, щоб fill міг і
+                    // збільшуватись, і зменшуватись без залишкових пікселів.
+                    cr.setOperator(Cairo.Operator.CLEAR);
+                    cr.paint();
+                    cr.setOperator(Cairo.Operator.OVER);
+
+                    const geometry = this._panelProgressGeometry;
+                    if (!geometry) return;
+
+                    // Беремо фактичну висоту виділеної області малювання, а не
+                    // кешовану висоту кнопки: GNOME інколи алокує 36 px замість
+                    // звичних 40 px. Так fill завжди дорівнює висоті самого шару.
+                    const height = Math.max(0, Math.round(area.height));
+                    if (height <= 0) return;
+
+                    const duration = Math.max(0, Number(this._seekLength) || 0);
+                    const position = Math.max(
+                        0,
+                        Number(this._panelProgressPosition) || 0,
+                    );
+                    const ratio = duration > 0
+                        ? Math.max(0, Math.min(1, position / duration))
+                        : 0;
+                    const { trackX, trackWidth, underlapWidth } = geometry;
+                    const fillWidth = Math.min(
+                        underlapWidth + trackWidth,
+                        Math.round(underlapWidth + trackWidth * ratio),
+                    );
+
+                    if (fillWidth > 0) {
+                        const x = trackX - underlapWidth;
+                        const y = 0;
+                        const w = fillWidth;
+                        const h = height;
+
+                        // Той самий радіус, який використовує фон кнопки.
+                        // Обмежуємо його половиною ширини/висоти fill, щоб
+                        // за малого прогресу заокруглення лишалося коректним.
+                        const buttonRadius = Math.max(
+                            0,
+                            Number(
+                                this._currentRadius ??
+                                this._settings?.get_int("album-radius") ??
+                                0,
+                            ) || 0,
+                        );
+                        const radius = Math.min(buttonRadius, w / 2, h / 2);
+
+                        cr.newSubPath();
+                        if (radius <= 0) {
+                            cr.rectangle(x, y, w, h);
+                        } else {
+                            cr.arc(
+                                x + w - radius,
+                                y + radius,
+                                radius,
+                                -Math.PI / 2,
+                                0,
+                            );
+                            cr.arc(
+                                x + w - radius,
+                                y + h - radius,
+                                radius,
+                                0,
+                                Math.PI / 2,
+                            );
+                            cr.arc(
+                                x + radius,
+                                y + h - radius,
+                                radius,
+                                Math.PI / 2,
+                                Math.PI,
+                            );
+                            cr.arc(
+                                x + radius,
+                                y + radius,
+                                radius,
+                                Math.PI,
+                                Math.PI * 1.5,
+                            );
+                            cr.closePath();
+                        }
+
+                        cr.setSourceRGBA(1, 1, 1, 0.1); // Білий з 10% прозорістю
+                        cr.fill();
+                    }
+                } finally {
+                    cr.$dispose();
+                }
+            });
+
+            // Фоновий шар і вміст мають бути шарами одного BinLayout.
+            // Не додаємо смужку прямо в PanelMenu.Button: інакше вона
+            // впливає на preferred size кнопки й стискає її по ширині.
+            this._buttonStack = new St.Widget({
+                layout_manager: new Clutter.BinLayout(),
+                x_align: Clutter.ActorAlign.FILL,
+                y_align: Clutter.ActorAlign.FILL,
+                x_expand: true,
+                y_expand: true,
+                reactive: true,
+                track_hover: true,
+            });
+            this._buttonStack.add_child(this._progressLayer);
+
             this.layout.add_child(this.albumArt);
             this.layout.add_child(this._trackStack);
-            this.add_child(this.layout);
+            this._buttonStack.add_child(this.layout);
+            this.add_child(this._buttonStack);
 
             // --- Візуальний стан кнопки (normal / hover / pressed) ---
             // Використовується _updateBackground() для вибору потрібного
@@ -81,24 +209,23 @@ export const MediaPlayerIndicator = GObject.registerClass(
             // (rgba з intensity), а не через CSS :hover/:active псевдокласи.
             this._visualState = "normal";
 
-            // Події обробляє внутрішній шар, а не PanelMenu.Button: інакше
-            // вбудований обробник останньої відкриває popup. albumArt зупиняє
-            // власні події, тож її клік і надалі відкриває прев'ю.
-            this.layout.connect("enter-event", () => {
+            // Події обробляються повнорозмірним _buttonStack. artLabel має
+            // власні обробники, які зупиняють події, тож на обкладинці ці
+            // дії не спрацьовують; решта кнопки реагує на всю свою площу.
+            this._buttonStack.connect("enter-event", () => {
                 if (this.menu.isOpen) return;
                 this._visualState = "hover";
                 this._syncThemeButtonPseudoClasses();
                 this._updateBackground();
             });
 
-            this.layout.connect("leave-event", () => {
+            this._buttonStack.connect("leave-event", () => {
                 if (!this.menu.isOpen) {
                     this._visualState = "normal";
                     this._syncThemeButtonPseudoClasses();
                     this._updateBackground();
                 }
 
-                // Якщо курсор пішов з кнопки, скасовуємо довгий клік
                 if (this._longPressTimeoutId) {
                     GLib.source_remove(this._longPressTimeoutId);
                     this._longPressTimeoutId = null;
@@ -113,35 +240,28 @@ export const MediaPlayerIndicator = GObject.registerClass(
                 }
             });
 
-            this.layout.connect("button-press-event", (_actor, event) => {
+            this._buttonStack.connect("button-press-event", (_actor, event) => {
                 this._visualState = "pressed";
                 this._syncThemeButtonPseudoClasses();
                 this._updateBackground();
 
-                const button = event.get_button();
-                if (button === Clutter.BUTTON_PRIMARY) {
-                    if (this._longPressTimeoutId) {
+                if (event.get_button() === Clutter.BUTTON_PRIMARY) {
+                    if (this._longPressTimeoutId)
                         GLib.source_remove(this._longPressTimeoutId);
-                    }
-                    // Запускаємо таймер на 500мс
                     this._longPressTimeoutId = GLib.timeout_add(
                         GLib.PRIORITY_DEFAULT,
                         500,
                         () => {
                             this._longPressTimeoutId = null;
-                            this.menu.toggle(); // Відкриваємо вікно
+                            if (!this._isDestroyed) this.menu.toggle();
                             return GLib.SOURCE_REMOVE;
                         },
                     );
                 }
-
                 return Clutter.EVENT_STOP;
             });
 
-            this.layout.connect("button-release-event", (_actor, event) => {
-                // Якщо відпускання відбулось уже після того, як довгий клік
-                // відкрив попап, стан кнопки має лишитись "pressed" — його
-                // тримає обробник menu "open-state-changed".
+            this._buttonStack.connect("button-release-event", (_actor, event) => {
                 if (!this.menu.isOpen) {
                     this._visualState = "hover";
                     this._syncThemeButtonPseudoClasses();
@@ -151,40 +271,40 @@ export const MediaPlayerIndicator = GObject.registerClass(
                 const button = event.get_button();
                 if (button === Clutter.BUTTON_PRIMARY) {
                     if (this._longPressTimeoutId) {
-                        // Таймер ще активний — це короткий клік (попередній трек)
                         GLib.source_remove(this._longPressTimeoutId);
                         this._longPressTimeoutId = null;
                         this._mprisCall("Previous");
                     }
-                    // Якщо таймер null, отже вже спрацював довгий клік, нічого не робимо
                 } else if (button === Clutter.BUTTON_SECONDARY) {
-                    // Правий клік — наступний трек
                     this._mprisCall("Next");
                 } else if (button === Clutter.BUTTON_MIDDLE) {
-                    // Середній клік — play/pause
                     this._mprisCall("PlayPause");
                 }
                 return Clutter.EVENT_STOP;
             });
 
-            this.layout.connect("scroll-event", (_actor, event) => {
+            this._buttonStack.connect("scroll-event", (_actor, event) => {
                 const direction = event.get_scroll_direction();
-                const seekStepUs = this._settings.get_int("seek-step");
-                let offsetUs = 0;
+                // MPRIS offsets are in microseconds: 5 seconds = 5,000,000.
                 if (direction === Clutter.ScrollDirection.UP) {
-                    offsetUs = seekStepUs;
+                    this._handleSeekScroll(5_000_000);
                 } else if (direction === Clutter.ScrollDirection.DOWN) {
-                    offsetUs = -seekStepUs;
-                } else {
-                    return Clutter.EVENT_STOP;
+                    this._handleSeekScroll(-5_000_000);
                 }
-                this._handleSeekScroll(offsetUs);
                 return Clutter.EVENT_STOP;
             });
 
             this._heightNotifyId = this.connect("notify::height", () => {
                 if (this.albumArt) this.albumArt.setTargetHeight(this.height);
+                this._updatePanelProgressGeometry();
             });
+            this._widthNotifyId = this.connect("notify::width", () =>
+                this._updatePanelProgressGeometry(),
+            );
+            this._albumArtWidthNotifyId = this.albumArt.connect(
+                "notify::width",
+                () => this._updatePanelProgressGeometry(),
+            );
 
             GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
                 if (!this._isDestroyed && this.height > 0 && this.albumArt)
@@ -267,6 +387,77 @@ export const MediaPlayerIndicator = GObject.registerClass(
             this.visible = false;
         }
 
+        /** Спільний обробник натискання для всієї кнопки, включно з обкладинкою. */
+        _handlePanelButtonPress(event) {
+            if (this._isDestroyed) return Clutter.EVENT_STOP;
+
+            this._visualState = "pressed";
+            this._syncThemeButtonPseudoClasses();
+            this._updateBackground();
+
+            const button = event.get_button();
+            if (button === Clutter.BUTTON_PRIMARY) {
+                if (this._longPressTimeoutId)
+                    GLib.source_remove(this._longPressTimeoutId);
+
+                this._longPressTimeoutId = GLib.timeout_add(
+                    GLib.PRIORITY_DEFAULT,
+                    500,
+                    () => {
+                        this._longPressTimeoutId = null;
+                        if (!this._isDestroyed) this.menu.toggle();
+                        return GLib.SOURCE_REMOVE;
+                    },
+                );
+            }
+
+            return Clutter.EVENT_STOP;
+        }
+
+        /** Лівий/правий/середній кліки однаково працюють на всій кнопці. */
+        _handlePanelButtonRelease(event) {
+            if (this._isDestroyed) return Clutter.EVENT_STOP;
+
+            if (!this.menu.isOpen) {
+                this._visualState = "hover";
+                this._syncThemeButtonPseudoClasses();
+                this._updateBackground();
+            }
+
+            const button = event.get_button();
+            if (button === Clutter.BUTTON_PRIMARY) {
+                if (this._longPressTimeoutId) {
+                    GLib.source_remove(this._longPressTimeoutId);
+                    this._longPressTimeoutId = null;
+                    this._mprisCall("Previous");
+                }
+            } else if (button === Clutter.BUTTON_SECONDARY) {
+                this._mprisCall("Next");
+            } else if (button === Clutter.BUTTON_MIDDLE) {
+                this._mprisCall("PlayPause");
+            }
+
+            return Clutter.EVENT_STOP;
+        }
+
+        /** Прокрутка над текстом/порожньою ділянкою кнопки лишається seek-керуванням. */
+        _handlePanelScroll(event) {
+            if (this._isDestroyed) return Clutter.EVENT_STOP;
+
+            const direction = event.get_scroll_direction();
+            const seekStepUs = this._settings.get_int("seek-step");
+            let offsetUs = 0;
+            if (direction === Clutter.ScrollDirection.UP) {
+                offsetUs = seekStepUs;
+            } else if (direction === Clutter.ScrollDirection.DOWN) {
+                offsetUs = -seekStepUs;
+            } else {
+                return Clutter.EVENT_STOP;
+            }
+            this._handleSeekScroll(offsetUs);
+            return Clutter.EVENT_STOP;
+        }
+
         /**
          * Надсилає MPRIS-метод (Next / Previous / PlayPause) до поточного плеєра.
          */
@@ -281,6 +472,124 @@ export const MediaPlayerIndicator = GObject.registerClass(
         _mprisSeek(offsetUs) {
             if (!this._playerProxy || !this._currentPlayerAddress) return;
             this._playerManager.seek(this._currentPlayerAddress, offsetUs);
+        }
+
+        /**
+         * Track займає кнопку за винятком ширини обкладинки. Fill має
+         * додаткове продовження під обкладинку на половину її ширини.
+         */
+        _updatePanelProgressGeometry() {
+            if (
+                this._isDestroyed ||
+                !this._progressLayer ||
+                !this.layout
+            )
+                return;
+
+            const width = Math.max(0, Math.round(this.width));
+            const height = Math.max(0, Math.round(this.height));
+            if (width <= 0 || height <= 0) {
+                this._panelProgressGeometry = null;
+                this._progressLayer.queue_repaint();
+                return;
+            }
+
+            const hasVisibleArt = Boolean(
+                this.albumArt && this.albumArt.visible && this.albumArt.width > 0,
+            );
+            const coverWidth = hasVisibleArt
+                ? Math.min(width, Math.round(this.albumArt.width))
+                : 0;
+            const coverX = hasVisibleArt
+                ? Math.max(0, Math.round(this.layout.x + this.albumArt.x))
+                : 0;
+            const trackX = Math.min(width, coverX + coverWidth);
+            const trackWidth = Math.max(0, width - trackX);
+            const underlapWidth = hasVisibleArt
+                ? Math.round(coverWidth / 2)
+                : 0;
+
+            this._panelProgressGeometry = {
+                height,
+                trackX,
+                trackWidth,
+                underlapWidth,
+            };
+            // Track прозорий — малюємо лише fill на St.DrawingArea.
+            this._progressLayer.queue_repaint();
+        }
+
+        /** Оновлює fill за позицією й тривалістю MPRIS у мікросекундах. */
+        _updatePanelProgressFill(position, length) {
+            if (this._isDestroyed || !this._progressLayer) return;
+            this._panelProgressPosition = Math.max(0, Number(position) || 0);
+            this._progressLayer.queue_repaint();
+        }
+
+        /**
+         * MPRIS не надсилає Position через PropertiesChanged, тому читаємо
+         * позицію напряму. Під час перемотування зберігаємо локальний відгук.
+         */
+        async _pollPanelProgress() {
+            if (
+                this._isDestroyed ||
+                this._seekActive ||
+                !this._currentPlayerAddress ||
+                !this._playerManager ||
+                this._panelProgressPollInFlight
+            )
+                return;
+
+            const address = this._currentPlayerAddress;
+            this._panelProgressPollInFlight = true;
+            try {
+                const position = await this._playerManager.getPosition(address);
+                if (
+                    this._isDestroyed ||
+                    address !== this._currentPlayerAddress ||
+                    this._seekActive ||
+                    position === null
+                )
+                    return;
+
+                this._panelProgressPosition = Math.max(0, Number(position) || 0);
+                this._updatePanelProgressFill(
+                    this._panelProgressPosition,
+                    this._seekLength,
+                );
+            } finally {
+                this._panelProgressPollInFlight = false;
+            }
+        }
+
+        /** Опитуємо позицію кожні 100 мс лише під час відтворення. */
+        _startPanelProgressPolling() {
+            if (this._isDestroyed || this._panelProgressTimeoutId) return;
+            this._pollPanelProgress();
+            this._panelProgressTimeoutId = GLib.timeout_add(
+                GLib.PRIORITY_DEFAULT,
+                100,
+                () => {
+                    if (
+                        this._isDestroyed ||
+                        !this._currentPlayerAddress ||
+                        !this._playerProxy ||
+                        this._playerProxy.PlaybackStatus !== "Playing"
+                    ) {
+                        this._panelProgressTimeoutId = null;
+                        return GLib.SOURCE_REMOVE;
+                    }
+                    this._pollPanelProgress();
+                    return GLib.SOURCE_CONTINUE;
+                },
+            );
+        }
+
+        _stopPanelProgressPolling() {
+            if (this._panelProgressTimeoutId) {
+                GLib.source_remove(this._panelProgressTimeoutId);
+                this._panelProgressTimeoutId = null;
+            }
         }
 
         /**
@@ -325,6 +634,11 @@ export const MediaPlayerIndicator = GObject.registerClass(
             this._seekPosition = Math.max(
                 0,
                 Math.min((this._seekPosition || 0) + offsetUs, upperBound),
+            );
+            this._panelProgressPosition = this._seekPosition;
+            this._updatePanelProgressFill(
+                this._panelProgressPosition,
+                length,
             );
             this.seekOverlay.updateProgress(this._seekPosition, length);
             this._syncSeekWidth();
@@ -376,6 +690,7 @@ export const MediaPlayerIndicator = GObject.registerClass(
         _exitSeekMode() {
             if (!this._seekActive) return;
             this._seekActive = false;
+            this._pollPanelProgress();
 
             this.trackLabel.restoreNaturalWidth();
 
@@ -488,6 +803,11 @@ export const MediaPlayerIndicator = GObject.registerClass(
                 if (result) {
                     let [variant] = result.recursiveUnpack();
                     this._seekPosition = Number(variant) || 0;
+                    this._panelProgressPosition = this._seekPosition;
+                    this._updatePanelProgressFill(
+                        this._panelProgressPosition,
+                        this._seekLength,
+                    );
                     this.seekOverlay.updateProgress(
                         this._seekPosition,
                         this._seekLength || 0,
@@ -616,6 +936,7 @@ export const MediaPlayerIndicator = GObject.registerClass(
                 this.albumArt._radius = radius;
                 this.albumArt.queue_repaint();
             }
+            this._updatePanelProgressGeometry();
         }
 
         /**
@@ -704,13 +1025,23 @@ export const MediaPlayerIndicator = GObject.registerClass(
         _setActivePlayer(address, proxy) {
             if (this._isDestroyed) return;
 
-            if (this._currentPlayerAddress !== address) this._resetSeekState();
+            if (this._currentPlayerAddress !== address) {
+                this._resetSeekState();
+                this._panelProgressPosition = 0;
+                this._currentTrackKey = null;
+            }
 
             this._currentPlayerAddress = address;
             this._playerProxy = proxy;
 
             this._updateMetadata();
             this._updateVisibility();
+            if (proxy.PlaybackStatus === "Playing") {
+                this._startPanelProgressPolling();
+            } else {
+                this._stopPanelProgressPolling();
+                this._pollPanelProgress();
+            }
         }
 
         /**
@@ -723,6 +1054,11 @@ export const MediaPlayerIndicator = GObject.registerClass(
             this._currentPlayerAddress = null;
             this._playerProxy = null;
             this._currentArtUrl = null;
+            this._currentTrackKey = null;
+            this._stopPanelProgressPolling();
+            this._panelProgressPosition = 0;
+            this._seekLength = 0;
+            this._updatePanelProgressFill(0, 0);
 
             this._updateVisibility();
             if (this.albumArt && this.albumArt.updateArt) {
@@ -762,7 +1098,34 @@ export const MediaPlayerIndicator = GObject.registerClass(
                     this._detailedWindow.updateInfo(metadata, appId);
                 }
 
+                // Ідентифікуємо саме трек, а не адресу MPRIS-плеєра.
+                // Деякі плеєри повторно використовують адресу для всього списку.
+                const artists = metadata["xesam:artist"];
+                const trackKey = JSON.stringify({
+                    id: String(metadata["mpris:trackid"] ?? ""),
+                    title: String(metadata["xesam:title"] ?? ""),
+                    artists: Array.isArray(artists)
+                        ? artists.map(String)
+                        : [String(artists ?? "")],
+                    album: String(metadata["xesam:album"] ?? ""),
+                });
+
+                if (
+                    this._currentTrackKey !== null &&
+                    trackKey !== this._currentTrackKey
+                ) {
+                    // Не чекаємо, поки зникне таймкод після прокручування.
+                    // _resetSeekState також скасовує старий таймер таймкоду.
+                    this._resetSeekState();
+                    this._panelProgressPosition = 0;
+                }
+                this._currentTrackKey = trackKey;
+
                 this._seekLength = Number(metadata["mpris:length"]) || 0;
+                this._updatePanelProgressFill(
+                    this._panelProgressPosition,
+                    this._seekLength,
+                );
                 if (this._seekActive) {
                     this.seekOverlay.updateProgress(
                         this._seekPosition,
@@ -830,10 +1193,14 @@ export const MediaPlayerIndicator = GObject.registerClass(
                 GLib.source_remove(this._detailedProgressTimeoutId);
                 this._detailedProgressTimeoutId = null;
             }
+            this._stopPanelProgressPolling();
             if (this._settingsId) this._settings.disconnect(this._settingsId);
             if (this._playersSettingsId)
                 this._settings.disconnect(this._playersSettingsId);
             if (this._heightNotifyId) this.disconnect(this._heightNotifyId);
+            if (this._widthNotifyId) this.disconnect(this._widthNotifyId);
+            if (this._albumArtWidthNotifyId && this.albumArt)
+                this.albumArt.disconnect(this._albumArtWidthNotifyId);
             if (this._themeChangedId && this._themeContext)
                 this._themeContext.disconnect(this._themeChangedId);
 
