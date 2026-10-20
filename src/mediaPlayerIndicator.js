@@ -10,6 +10,7 @@ import Gio from "gi://Gio";
 import { TrackLabel } from "./textLabel.js";
 import { CairoRoundedArt } from "./artLabel.js";
 import { SeekOverlay } from "./seekOverlay.js";
+import { SeekController } from "./seekController.js";
 import { DisplayMode } from "./constants.js";
 import { PaletteManager } from "./paletteManager.js";
 import { MprisPlayerManager } from "./mprisPlayerManager.js";
@@ -65,6 +66,7 @@ export const MediaPlayerIndicator = GObject.registerClass(
 
             this.trackLabel = new TrackLabel(this._settings, this);
             this.seekOverlay = new SeekOverlay();
+            this._seekController = new SeekController(this);
 
             // Стек: trackLabel і seekOverlay займають РІВНО ту саму область
             // (Clutter.BinLayout), перемикання між ними — суто crossfade
@@ -532,202 +534,31 @@ export const MediaPlayerIndicator = GObject.registerClass(
          * таймкоду — не чекаючи підтвердження від плеєра.
          */
         _handleSeekScroll(offsetUs) {
-            if (this._isDestroyed || !this._currentPlayerAddress) return;
-
-            this._mprisSeek(offsetUs);
-
-            if (!this._seekActive) this._enterSeekMode();
-
-            const length = this._seekLength || 0;
-            const upperBound = length > 0 ? length : Number.MAX_SAFE_INTEGER;
-            this._seekPosition = Math.max(
-                0,
-                Math.min((this._seekPosition || 0) + offsetUs, upperBound),
-            );
-            this._panelProgressPosition = this._seekPosition;
-            this._updatePanelProgressFill(
-                this._panelProgressPosition,
-                length,
-            );
-            this.seekOverlay.updateProgress(this._seekPosition, length);
-            this._syncSeekWidth();
-
-            this._resetSeekHideTimer();
-
-            // На старті сесії локальна позиція невідома (стартує з 0) —
-            // одразу підтягуємо реальну асинхронно і без стрибка коригуємо базу.
-            if (this._seekPositionUnknown) {
-                this._seekPositionUnknown = false;
-                this._syncSeekPosition(this._currentPlayerAddress);
-            }
+            this._seekController.handleSeekScroll(offsetUs);
         }
 
-        /**
-         * Вмикає режим перемотування: crossfade тексту в прогрес-бар/таймкод
-         * (200мс), кольори оверлею беруться з поточної палітри кнопки.
-         */
         _enterSeekMode() {
-            this._seekActive = true;
-            this._seekPositionUnknown = true;
-            this._seekPosition = 0;
-
-            this.seekOverlay.setColors(
-                this._palette ? this._palette.background : null,
-                this._palette ? this._palette.text : null,
-            );
-
-            this.trackLabel.remove_transition("opacity");
-            this.trackLabel.ease({
-                opacity: 0,
-                duration: 200,
-                mode: Clutter.AnimationMode.EASE_OUT_QUAD,
-            });
-
-            this.seekOverlay.opacity = 0;
-            this.seekOverlay.visible = true;
-            this.seekOverlay.remove_all_transitions();
-            this.seekOverlay.ease({
-                opacity: 255,
-                duration: 200,
-                mode: Clutter.AnimationMode.EASE_IN_QUAD,
-            });
+            this._seekController.enterSeekMode();
         }
 
-        /**
-         * Вимикає режим перемотування: crossfade назад до тексту (200мс).
-         */
         _exitSeekMode() {
-            if (!this._seekActive) return;
-            this._seekActive = false;
-            this._pollPanelProgress();
-
-            this.trackLabel.restoreNaturalWidth();
-
-            this.seekOverlay.remove_all_transitions();
-            this.seekOverlay.ease({
-                opacity: 0,
-                duration: 200,
-                mode: Clutter.AnimationMode.EASE_OUT_QUAD,
-                onComplete: () => {
-                    if (!this._isDestroyed) this.seekOverlay.visible = false;
-                },
-            });
-
-            this.trackLabel.remove_transition("opacity");
-            this.trackLabel.ease({
-                opacity: 255,
-                duration: 200,
-                mode: Clutter.AnimationMode.EASE_IN_QUAD,
-            });
+            this._seekController.exitSeekMode();
         }
 
-        /**
-         * Миттєво (без анімації) скидає стан сесії перемотування —
-         * використовується при зміні/зникненні активного плеєра, коли
-         * плавний crossfade вже недоречний.
-         */
         _resetSeekState() {
-            if (this._seekHideTimeoutId) {
-                GLib.source_remove(this._seekHideTimeoutId);
-                this._seekHideTimeoutId = null;
-            }
-            this._seekActive = false;
-            this._seekPositionUnknown = true;
-            this._seekPosition = 0;
-
-            if (this.seekOverlay) {
-                this.seekOverlay.remove_all_transitions();
-                this.seekOverlay.opacity = 0;
-                this.seekOverlay.visible = false;
-            }
-            if (this.trackLabel) {
-                this.trackLabel.remove_all_transitions();
-                this.trackLabel.opacity = 255;
-                this.trackLabel.set_width(-1);
-            }
+            this._seekController.resetSeekState();
         }
 
-        /**
-         * Підганяє ширину кнопки під поточний таймкод, якщо він ширший за
-         * природну ширину назви треку — тією ж анімацією, що й зміна треку.
-         */
         _syncSeekWidth() {
-            if (this._isDestroyed || !this.seekOverlay || !this.trackLabel)
-                return;
-            this.trackLabel.growToFit(this.seekOverlay.getRequiredWidth());
+            this._seekController.syncSeekWidth();
         }
 
-        /**
-         * Перезапускає таймер автоприховування оверлею перемотування —
-         * якщо скролів більше нема протягом 1.5с, повертаємось до тексту.
-         */
         _resetSeekHideTimer() {
-            if (this._seekHideTimeoutId) {
-                GLib.source_remove(this._seekHideTimeoutId);
-            }
-            const hideDelayMs = this._settings.get_int(
-                "seek-timecode-duration",
-            );
-            this._seekHideTimeoutId = GLib.timeout_add(
-                GLib.PRIORITY_DEFAULT,
-                hideDelayMs,
-                () => {
-                    this._seekHideTimeoutId = null;
-                    this._exitSeekMode();
-                    return GLib.SOURCE_REMOVE;
-                },
-            );
+            this._seekController.resetSeekHideTimer();
         }
 
-        /**
-         * Одноразовий запит реальної позиції відтворення по DBus
-         * (Position не приходить через PropertiesChanged за специфікацією
-         * MPRIS, тому читаємо напряму через org.freedesktop.DBus.Properties.Get,
-         * як і Identity в mprisPlayerManager.js).
-         */
         async _syncSeekPosition(address) {
-            try {
-                const result = await Gio.DBus.session.call(
-                    address,
-                    "/org/mpris/MediaPlayer2",
-                    "org.freedesktop.DBus.Properties",
-                    "Get",
-                    new GLib.Variant("(ss)", [
-                        "org.mpris.MediaPlayer2.Player",
-                        "Position",
-                    ]),
-                    null,
-                    Gio.DBusCallFlags.NONE,
-                    -1,
-                    null,
-                );
-
-                if (
-                    this._isDestroyed ||
-                    !this._seekActive ||
-                    this._currentPlayerAddress !== address
-                )
-                    return;
-
-                if (result) {
-                    let [variant] = result.recursiveUnpack();
-                    this._seekPosition = Number(variant) || 0;
-                    this._panelProgressPosition = this._seekPosition;
-                    this._updatePanelProgressFill(
-                        this._panelProgressPosition,
-                        this._seekLength,
-                    );
-                    this.seekOverlay.updateProgress(
-                        this._seekPosition,
-                        this._seekLength || 0,
-                    );
-                    this._syncSeekWidth();
-                }
-            } catch (e) {
-                // Деякі плеєри не підтримують властивість Position —
-                // лишаємось на локально порахованій позиції.
-                log(`MPRIS Position query error: ${e.message}`);
-            }
+            return this._seekController.syncSeekPosition(address);
         }
 
         _applyCustomStyles() {
