@@ -12,6 +12,7 @@ import { CairoRoundedArt } from "./artLabel.js";
 import { SeekOverlay } from "./seekOverlay.js";
 import { SeekController } from "./seekController.js";
 import { ProgressController } from "./progressController.js";
+import { buildTrackKey, getArtworkUrl, getTrackLength } from "./metadataUtils.js";
 import { DisplayMode } from "./constants.js";
 import { PaletteManager } from "./paletteManager.js";
 import { MprisPlayerManager } from "./mprisPlayerManager.js";
@@ -757,15 +758,7 @@ export const MediaPlayerIndicator = GObject.registerClass(
 
                 // Ідентифікуємо саме трек, а не адресу MPRIS-плеєра.
                 // Деякі плеєри повторно використовують адресу для всього списку.
-                const artists = metadata["xesam:artist"];
-                const trackKey = JSON.stringify({
-                    id: String(metadata["mpris:trackid"] ?? ""),
-                    title: String(metadata["xesam:title"] ?? ""),
-                    artists: Array.isArray(artists)
-                        ? artists.map(String)
-                        : [String(artists ?? "")],
-                    album: String(metadata["xesam:album"] ?? ""),
-                });
+                const trackKey = buildTrackKey(metadata);
 
                 if (
                     this._currentTrackKey !== null &&
@@ -778,7 +771,7 @@ export const MediaPlayerIndicator = GObject.registerClass(
                 }
                 this._currentTrackKey = trackKey;
 
-                this._seekLength = Number(metadata["mpris:length"]) || 0;
+                this._seekLength = getTrackLength(metadata);
                 this._updatePanelProgressFill(
                     this._panelProgressPosition,
                     this._seekLength,
@@ -791,7 +784,7 @@ export const MediaPlayerIndicator = GObject.registerClass(
                     this._syncSeekWidth();
                 }
 
-                let artUrl = metadata["mpris:artUrl"] || "";
+                const artUrl = getArtworkUrl(metadata);
                 this._currentArtUrl = artUrl;
                 const radius = this._settings.get_int("album-radius");
 
