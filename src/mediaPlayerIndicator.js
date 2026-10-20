@@ -14,6 +14,7 @@ import { DisplayMode } from "./constants.js";
 import { PaletteManager } from "./paletteManager.js";
 import { MprisPlayerManager } from "./mprisPlayerManager.js";
 import { DetailedPlayerWindow } from "./detailedPlayerWindow.js";
+import { calculatePanelProgressGeometry, paintPanelProgress } from "./panelProgress.js";
 
 export const MediaPlayerIndicator = GObject.registerClass(
     { GTypeName: "MediaPlayerIndicator" },
@@ -90,97 +91,14 @@ export const MediaPlayerIndicator = GObject.registerClass(
                 reactive: false,
             });
             this._progressLayer.connect("repaint", (area) => {
-                const cr = area.get_context();
-                try {
-                    // Повністю очищаємо попередній кадр, щоб fill міг і
-                    // збільшуватись, і зменшуватись без залишкових пікселів.
-                    cr.setOperator(Cairo.Operator.CLEAR);
-                    cr.paint();
-                    cr.setOperator(Cairo.Operator.OVER);
-
-                    const geometry = this._panelProgressGeometry;
-                    if (!geometry) return;
-
-                    // Беремо фактичну висоту виділеної області малювання, а не
-                    // кешовану висоту кнопки: GNOME інколи алокує 36 px замість
-                    // звичних 40 px. Так fill завжди дорівнює висоті самого шару.
-                    const height = Math.max(0, Math.round(area.height));
-                    if (height <= 0) return;
-
-                    const duration = Math.max(0, Number(this._seekLength) || 0);
-                    const position = Math.max(
-                        0,
-                        Number(this._panelProgressPosition) || 0,
-                    );
-                    const ratio = duration > 0
-                        ? Math.max(0, Math.min(1, position / duration))
-                        : 0;
-                    const { trackX, trackWidth, underlapWidth } = geometry;
-                    const fillWidth = Math.min(
-                        underlapWidth + trackWidth,
-                        Math.round(underlapWidth + trackWidth * ratio),
-                    );
-
-                    if (fillWidth > 0) {
-                        const x = trackX - underlapWidth;
-                        const y = 0;
-                        const w = fillWidth;
-                        const h = height;
-
-                        // Той самий радіус, який використовує фон кнопки.
-                        // Обмежуємо його половиною ширини/висоти fill, щоб
-                        // за малого прогресу заокруглення лишалося коректним.
-                        const buttonRadius = Math.max(
-                            0,
-                            Number(
-                                this._currentRadius ??
-                                this._settings?.get_int("album-radius") ??
-                                0,
-                            ) || 0,
-                        );
-                        const radius = Math.min(buttonRadius, w / 2, h / 2);
-
-                        cr.newSubPath();
-                        if (radius <= 0) {
-                            cr.rectangle(x, y, w, h);
-                        } else {
-                            cr.arc(
-                                x + w - radius,
-                                y + radius,
-                                radius,
-                                -Math.PI / 2,
-                                0,
-                            );
-                            cr.arc(
-                                x + w - radius,
-                                y + h - radius,
-                                radius,
-                                0,
-                                Math.PI / 2,
-                            );
-                            cr.arc(
-                                x + radius,
-                                y + h - radius,
-                                radius,
-                                Math.PI / 2,
-                                Math.PI,
-                            );
-                            cr.arc(
-                                x + radius,
-                                y + radius,
-                                radius,
-                                Math.PI,
-                                Math.PI * 1.5,
-                            );
-                            cr.closePath();
-                        }
-
-                        cr.setSourceRGBA(1, 1, 1, 0.1); // Білий з 10% прозорістю
-                        cr.fill();
-                    }
-                } finally {
-                    cr.$dispose();
-                }
+                paintPanelProgress(area, {
+                    Cairo,
+                    geometry: this._panelProgressGeometry,
+                    position: this._panelProgressPosition,
+                    duration: this._seekLength,
+                    radius: this._currentRadius,
+                    settings: this._settings,
+                });
             });
 
             // Фоновий шар і вміст мають бути шарами одного BinLayout.
@@ -486,35 +404,26 @@ export const MediaPlayerIndicator = GObject.registerClass(
             )
                 return;
 
-            const width = Math.max(0, Math.round(this.width));
-            const height = Math.max(0, Math.round(this.height));
-            if (width <= 0 || height <= 0) {
+            const geometry = calculatePanelProgressGeometry({
+                width: this.width,
+                height: this.height,
+                layoutX: this.layout.x,
+                artVisible: Boolean(
+                    this.albumArt &&
+                    this.albumArt.visible &&
+                    this.albumArt.width > 0,
+                ),
+                artWidth: this.albumArt?.width,
+                artX: this.albumArt?.x,
+            });
+
+            if (!geometry) {
                 this._panelProgressGeometry = null;
                 this._progressLayer.queue_repaint();
                 return;
             }
 
-            const hasVisibleArt = Boolean(
-                this.albumArt && this.albumArt.visible && this.albumArt.width > 0,
-            );
-            const coverWidth = hasVisibleArt
-                ? Math.min(width, Math.round(this.albumArt.width))
-                : 0;
-            const coverX = hasVisibleArt
-                ? Math.max(0, Math.round(this.layout.x + this.albumArt.x))
-                : 0;
-            const trackX = Math.min(width, coverX + coverWidth);
-            const trackWidth = Math.max(0, width - trackX);
-            const underlapWidth = hasVisibleArt
-                ? Math.round(coverWidth / 2)
-                : 0;
-
-            this._panelProgressGeometry = {
-                height,
-                trackX,
-                trackWidth,
-                underlapWidth,
-            };
+            this._panelProgressGeometry = geometry;
             // Track прозорий — малюємо лише fill на St.DrawingArea.
             this._progressLayer.queue_repaint();
         }
