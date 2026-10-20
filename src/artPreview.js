@@ -50,7 +50,7 @@ export const ArtPreview = GObject.registerClass(
                 width: imgW,
                 height: imgH,
                 style: `
-                    background-image: url("${artUrl}");
+                    background-image: none;
                     background-size: contain;
                     background-repeat: no-repeat;
                     background-position: center;
@@ -145,7 +145,9 @@ export const ArtPreview = GObject.registerClass(
                 const base = tmdbMatch[1];
                 const path = tmdbMatch[3];
                 const query = tmdbMatch[4] || '';
-                for (const size of ['original', 'w1280', 'w780', 'w500', 'w342', 'w185'])
+                // Починаємо з невеликого зображення для визначення пропорцій.
+                // Нижче вибираємо мінімальний розмір, достатній для екрана.
+                for (const size of ['w185', 'w342', 'w500', 'w780', 'w1280', 'original'])
                     addCandidate(`${base}${size}${path}${query}`);
             }
 
@@ -225,6 +227,48 @@ export const ArtPreview = GObject.registerClass(
                                 return;
                             }
 
+                            // Для TMDB не завантажуємо оригінал без потреби.
+                            // Спочатку визначаємо розмір, який реально займатиме
+                            // картинка, і додаємо 5% запасу для чіткості.
+                            if (tmdbMatch) {
+                                const displaySize = fitToScreen(width, height);
+                                const requiredWidth = Math.ceil(displaySize.width * 1.05);
+                                const requiredHeight = Math.ceil(displaySize.height * 1.05);
+
+                                if (width < requiredWidth || height < requiredHeight) {
+                                    const scaleNeeded = Math.max(
+                                        requiredWidth / width,
+                                        requiredHeight / height,
+                                    );
+                                    const neededSourceWidth = Math.ceil(width * scaleNeeded);
+
+                                    // Одразу переходимо до найменшого більшого варіанта,
+                                    // пропускаючи розміри, яких уже недостатньо.
+                                    const nextSuitableIndex = candidates.findIndex(
+                                        (url, candidateIndex) => {
+                                            if (candidateIndex <= index)
+                                                return false;
+
+                                            const sizeMatch = url.match(
+                                                /\/t\/p\/w(\d+)\//i,
+                                            );
+
+                                            if (sizeMatch)
+                                                return Number(sizeMatch[1]) >= neededSourceWidth;
+
+                                            return /\/t\/p\/original\//i.test(url);
+                                        },
+                                    );
+
+                                    if (nextSuitableIndex >= 0) {
+                                        tryCandidate(nextSuitableIndex);
+                                        return;
+                                    }
+                                    // Якщо більших варіантів немає, використовуємо
+                                    // найкраще доступне зображення.
+                                }
+                            }
+
                             // maxresdefault іноді повертає маленький placeholder замість
                             // помилки HTTP. Не приймаємо його за якісний thumbnail.
                             if (isYouTubeThumbnail) {
@@ -274,6 +318,7 @@ export const ArtPreview = GObject.registerClass(
                 "Cubic": { show: Clutter.AnimationMode.EASE_OUT_CUBIC, hide: Clutter.AnimationMode.EASE_IN_CUBIC, def: 300 },
                 "Elastic": { show: Clutter.AnimationMode.EASE_OUT_ELASTIC, hide: Clutter.AnimationMode.EASE_IN_ELASTIC, def: 800 },
                 "Expo": { show: Clutter.AnimationMode.EASE_OUT_EXPO, hide: Clutter.AnimationMode.EASE_IN_EXPO, def: 400 },
+                "Linear": { show: Clutter.AnimationMode.LINEAR, hide: Clutter.AnimationMode.LINEAR, def: 300 },
                 "Quad": { show: Clutter.AnimationMode.EASE_OUT_QUAD, hide: Clutter.AnimationMode.EASE_IN_QUAD, def: 250 },
                 "Quart": { show: Clutter.AnimationMode.EASE_OUT_QUART, hide: Clutter.AnimationMode.EASE_IN_QUART, def: 300 },
                 "Quint": { show: Clutter.AnimationMode.EASE_OUT_QUINT, hide: Clutter.AnimationMode.EASE_IN_QUINT, def: 350 },

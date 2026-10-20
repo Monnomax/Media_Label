@@ -675,6 +675,7 @@ export default class MprisLabelPreferences extends ExtensionPreferences {
             { name: "Cubic", def: 300 },
             { name: "Elastic", def: 800 },
             { name: "Expo", def: 400 },
+            { name: "Linear", def: 300 },
             { name: "Quad", def: 250 },
             { name: "Quart", def: 300 },
             { name: "Quint", def: 350 },
