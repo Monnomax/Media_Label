@@ -22,6 +22,8 @@ import { updateMetadata } from "./metadataController.js";
 
 import { setActivePlayer, clearActivePlayer, updateVisibility } from "./activePlayerController.js";
 
+import { handlePanelButtonPress, handlePanelButtonRelease, handlePanelScroll, mprisCall, mprisSeek } from "./userActionController.js";
+
 export const MediaPlayerIndicator = GObject.registerClass(
     { GTypeName: "MediaPlayerIndicator" },
     class MediaPlayerIndicator extends PanelMenu.Button {
@@ -300,89 +302,31 @@ export const MediaPlayerIndicator = GObject.registerClass(
 
         /** Спільний обробник натискання для всієї кнопки, включно з обкладинкою. */
         _handlePanelButtonPress(event) {
-            if (this._isDestroyed) return Clutter.EVENT_STOP;
-
-            this._visualState = "pressed";
-            this._syncThemeButtonPseudoClasses();
-            this._updateBackground();
-
-            const button = event.get_button();
-            if (button === Clutter.BUTTON_PRIMARY) {
-                if (this._longPressTimeoutId)
-                    GLib.source_remove(this._longPressTimeoutId);
-
-                this._longPressTimeoutId = GLib.timeout_add(
-                    GLib.PRIORITY_DEFAULT,
-                    500,
-                    () => {
-                        this._longPressTimeoutId = null;
-                        if (!this._isDestroyed) this.menu.toggle();
-                        return GLib.SOURCE_REMOVE;
-                    },
-                );
-            }
-
-            return Clutter.EVENT_STOP;
+            return handlePanelButtonPress.call(this, event, Clutter, GLib);
         }
 
         /** Лівий/правий/середній кліки однаково працюють на всій кнопці. */
         _handlePanelButtonRelease(event) {
-            if (this._isDestroyed) return Clutter.EVENT_STOP;
-
-            if (!this.menu.isOpen) {
-                this._visualState = "hover";
-                this._syncThemeButtonPseudoClasses();
-                this._updateBackground();
-            }
-
-            const button = event.get_button();
-            if (button === Clutter.BUTTON_PRIMARY) {
-                if (this._longPressTimeoutId) {
-                    GLib.source_remove(this._longPressTimeoutId);
-                    this._longPressTimeoutId = null;
-                    this._mprisCall("Previous");
-                }
-            } else if (button === Clutter.BUTTON_SECONDARY) {
-                this._mprisCall("Next");
-            } else if (button === Clutter.BUTTON_MIDDLE) {
-                this._mprisCall("PlayPause");
-            }
-
-            return Clutter.EVENT_STOP;
+            return handlePanelButtonRelease.call(this, event, Clutter, GLib);
         }
 
         /** Прокрутка над текстом/порожньою ділянкою кнопки лишається seek-керуванням. */
         _handlePanelScroll(event) {
-            if (this._isDestroyed) return Clutter.EVENT_STOP;
-
-            const direction = event.get_scroll_direction();
-            const seekStepUs = this._settings.get_int("seek-step");
-            let offsetUs = 0;
-            if (direction === Clutter.ScrollDirection.UP) {
-                offsetUs = seekStepUs;
-            } else if (direction === Clutter.ScrollDirection.DOWN) {
-                offsetUs = -seekStepUs;
-            } else {
-                return Clutter.EVENT_STOP;
-            }
-            this._handleSeekScroll(offsetUs);
-            return Clutter.EVENT_STOP;
+            return handlePanelScroll.call(this, event, Clutter);
         }
 
         /**
          * Надсилає MPRIS-метод (Next / Previous / PlayPause) до поточного плеєра.
          */
         _mprisCall(method) {
-            if (!this._playerProxy || !this._currentPlayerAddress) return;
-            this._playerManager.call(this._currentPlayerAddress, method);
+            return mprisCall.call(this, method);
         }
 
         /**
          * Надсилає MPRIS Seek (offset у мікросекундах, може бути від'ємним).
          */
         _mprisSeek(offsetUs) {
-            if (!this._playerProxy || !this._currentPlayerAddress) return;
-            this._playerManager.seek(this._currentPlayerAddress, offsetUs);
+            return mprisSeek.call(this, offsetUs);
         }
 
         /**
