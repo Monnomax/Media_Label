@@ -136,3 +136,36 @@ export function paintPanelProgress(area, {
         cr.$dispose();
     }
 }
+
+/** Оновлює геометрію progress layer для конкретного індикатора. */
+export function updatePanelProgressGeometry(indicator) {
+    if (
+        indicator._isDestroyed ||
+        !indicator._progressLayer ||
+        !indicator.layout
+    )
+        return;
+
+    const geometry = calculatePanelProgressGeometry({
+        width: indicator.width,
+        height: indicator.height,
+        layoutX: indicator.layout.x,
+        artVisible: Boolean(
+            indicator.albumArt &&
+            indicator.albumArt.visible &&
+            indicator.albumArt.width > 0,
+        ),
+        artWidth: indicator.albumArt?.width,
+        artX: indicator.albumArt?.x,
+    });
+
+    if (!geometry) {
+        indicator._panelProgressGeometry = null;
+        indicator._progressLayer.queue_repaint();
+        return;
+    }
+
+    indicator._panelProgressGeometry = geometry;
+    // Track прозорий — малюємо лише fill на St.DrawingArea.
+    indicator._progressLayer.queue_repaint();
+}

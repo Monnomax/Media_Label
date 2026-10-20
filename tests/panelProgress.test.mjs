@@ -4,6 +4,7 @@ import {
     calculatePanelProgressGeometry,
     calculatePanelProgressFillWidth,
     paintPanelProgress,
+    updatePanelProgressGeometry,
 } from "../src/panelProgress.js";
 
 test("geometry includes half-cover underlap when artwork is visible", () => {
@@ -119,4 +120,91 @@ test("renderer disposes Cairo context when geometry is unavailable", () => {
     );
 
     assert.equal(disposed, true);
+});
+
+
+test("updatePanelProgressGeometry stores visible-art geometry and queues repaint", () => {
+    let repaintCount = 0;
+    const indicator = {
+        _isDestroyed: false,
+        _progressLayer: { queue_repaint() { repaintCount += 1; } },
+        layout: { x: 3 },
+        width: 120,
+        height: 40,
+        albumArt: { visible: true, width: 40, x: 2 },
+        _panelProgressGeometry: null,
+    };
+
+    updatePanelProgressGeometry(indicator);
+
+    assert.deepEqual(indicator._panelProgressGeometry, {
+        height: 40,
+        trackX: 45,
+        trackWidth: 75,
+        underlapWidth: 20,
+    });
+    assert.equal(repaintCount, 1);
+});
+
+test("updatePanelProgressGeometry starts at the left edge without visible artwork", () => {
+    let repaintCount = 0;
+    const indicator = {
+        _isDestroyed: false,
+        _progressLayer: { queue_repaint() { repaintCount += 1; } },
+        layout: { x: 3 },
+        width: 120,
+        height: 40,
+        albumArt: { visible: false, width: 40, x: 2 },
+        _panelProgressGeometry: null,
+    };
+
+    updatePanelProgressGeometry(indicator);
+
+    assert.deepEqual(indicator._panelProgressGeometry, {
+        height: 40,
+        trackX: 0,
+        trackWidth: 120,
+        underlapWidth: 0,
+    });
+    assert.equal(repaintCount, 1);
+});
+
+test("updatePanelProgressGeometry clears geometry when dimensions are not positive", () => {
+    let repaintCount = 0;
+    const indicator = {
+        _isDestroyed: false,
+        _progressLayer: { queue_repaint() { repaintCount += 1; } },
+        layout: { x: 0 },
+        width: 0,
+        height: 40,
+        albumArt: { visible: false, width: 0, x: 0 },
+        _panelProgressGeometry: { trackX: 10 },
+    };
+
+    updatePanelProgressGeometry(indicator);
+
+    assert.equal(indicator._panelProgressGeometry, null);
+    assert.equal(repaintCount, 1);
+});
+
+test("updatePanelProgressGeometry is a no-op for destroyed or incomplete indicators", () => {
+    let repaintCount = 0;
+    const layer = { queue_repaint() { repaintCount += 1; } };
+    updatePanelProgressGeometry({
+        _isDestroyed: true,
+        _progressLayer: layer,
+        layout: { x: 0 },
+    });
+    updatePanelProgressGeometry({
+        _isDestroyed: false,
+        _progressLayer: null,
+        layout: { x: 0 },
+    });
+    updatePanelProgressGeometry({
+        _isDestroyed: false,
+        _progressLayer: layer,
+        layout: null,
+    });
+
+    assert.equal(repaintCount, 0);
 });

@@ -16,7 +16,7 @@ import { DisplayMode } from "./constants.js";
 import { PaletteManager } from "./paletteManager.js";
 import { MprisPlayerManager } from "./mprisPlayerManager.js";
 import { DetailedPlayerWindow } from "./detailedPlayerWindow.js";
-import { calculatePanelProgressGeometry, paintPanelProgress } from "./panelProgress.js";
+import { paintPanelProgress, updatePanelProgressGeometry } from "./panelProgress.js";
 
 import { updateMetadata } from "./metadataController.js";
 
@@ -336,35 +336,7 @@ export const MediaPlayerIndicator = GObject.registerClass(
          * додаткове продовження під обкладинку на половину її ширини.
          */
         _updatePanelProgressGeometry() {
-            if (
-                this._isDestroyed ||
-                !this._progressLayer ||
-                !this.layout
-            )
-                return;
-
-            const geometry = calculatePanelProgressGeometry({
-                width: this.width,
-                height: this.height,
-                layoutX: this.layout.x,
-                artVisible: Boolean(
-                    this.albumArt &&
-                    this.albumArt.visible &&
-                    this.albumArt.width > 0,
-                ),
-                artWidth: this.albumArt?.width,
-                artX: this.albumArt?.x,
-            });
-
-            if (!geometry) {
-                this._panelProgressGeometry = null;
-                this._progressLayer.queue_repaint();
-                return;
-            }
-
-            this._panelProgressGeometry = geometry;
-            // Track прозорий — малюємо лише fill на St.DrawingArea.
-            this._progressLayer.queue_repaint();
+            return updatePanelProgressGeometry(this);
         }
 
         /** Оновлює fill за позицією й тривалістю MPRIS у мікросекундах. */
