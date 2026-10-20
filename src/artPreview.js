@@ -5,6 +5,15 @@ import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
 import GdkPixbuf from 'gi://GdkPixbuf';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import {
+    buildArtworkCandidates,
+    fitArtworkToScreen,
+    isArtworkResolutionEnough,
+    getRequiredSourceWidth,
+    findNextSuitableTmdbCandidate,
+    getYouTubeMinimumWidth,
+    escapeCssUrl,
+} from "./artworkUtils.js";
 
 export const ArtPreview = GObject.registerClass(
     { GTypeName: 'ArtPreview' },
@@ -116,85 +125,148 @@ export const ArtPreview = GObject.registerClass(
 
             // Спочатку пробуємо найбільші відомі варіанти. Якщо CDN їх не має,
             // послідовно переходимо до меншого варіанта й наприкінці — до URL MPRIS.
-            const candidates = [];
-            const addCandidate = (url) => {
-                if (url && !candidates.includes(url)) candidates.push(url);
-            };
-            let isYouTubeThumbnail = false;
-            const youtubeMatch = artUrl.match(
-                /^(https?:\/\/(?:i\.ytimg\.com|img\.youtube\.com)\/vi(?:_webp)?\/[^/]+\/)([^/?#]+)(\.(?:jpg|jpeg|png|webp))(?:[?#].*)?$/i,
+            const {
+                candidates,
+                isYouTubeThumbnail,
+                isTmdbArtwork,
+            } = buildArtworkCandidates(artUrl);
+
+            const monitor = Main.layoutManager.primaryMonitor;
+            const stageWidth = Math.max(
+                1,
+                (monitor && monitor.width) || global.stage.width || 1366,
             );
-
-            if (youtubeMatch) {
-                isYouTubeThumbnail = true;
-                const prefix = youtubeMatch[1];
-                const extension = youtubeMatch[3];
-                addCandidate(`${prefix}maxresdefault${extension}`);
-                addCandidate(`${prefix}sddefault${extension}`);
-                addCandidate(`${prefix}hqdefault${extension}`);
-                addCandidate(`${prefix}mqdefault${extension}`);
-                addCandidate(`${prefix}default${extension}`);
-            }
-
-            // TMDB офіційно підтримує розмір original; якщо він недоступний,
-            // перевіряємо типові великі розміри й лише тоді повертаємося до MPRIS URL.
-            const tmdbMatch = artUrl.match(
-                /^(https?:\/\/image\.tmdb\.org\/t\/p\/)([^/]+)(\/[^?#]+)([?#].*)?$/i,
+            const stageHeight = Math.max(
+                1,
+                (monitor && monitor.height) || global.stage.height || 768,
             );
-            if (tmdbMatch) {
-                const base = tmdbMatch[1];
-                const path = tmdbMatch[3];
-                const query = tmdbMatch[4] || '';
-                // Починаємо з невеликого зображення для визначення пропорцій.
-                // Нижче вибираємо мінімальний розмір, достатній для екрана.
-                for (const size of ['w185', 'w342', 'w500', 'w780', 'w1280', 'original'])
-                    addCandidate(`${base}${size}${path}${query}`);
-            }
+            const fitToScreen = (width, height) =>
+                fitArtworkToScreen(width, height, stageWidth, stageHeight);
 
-            // YouTube Music та деякі інші сервіси використовують Google image CDN,
-            // де розмір заданий суфіксом на кшталт =w120-h120-l90-rj.
-            const googleHost = /^https?:\/\/(?:yt3\.ggpht\.com|lh\d+\.googleusercontent\.com)\//i.test(artUrl);
-            if (googleHost) {
-                const suffixMatch = artUrl.match(/^(https?:\/\/[^?#]+?)(?:=w\d+-h\d+[^/?#]*|=s\d+[^/?#]*)([?#].*)?$/i);
-                if (suffixMatch) {
-                    const base = suffixMatch[1];
-                    const query = suffixMatch[2] || '';
-                    addCandidate(`${base}=w1600-h1600${query}`);
-                    addCandidate(`${base}=w1200-h1200${query}`);
-                    addCandidate(`${base}=w800-h800${query}`);
+            // Cache downloaded bytes so CSS can load the local file rather than
+            // fetching the same remote candidate a second time. Keep the cache bounded.
+            const trimArtworkCache = (cacheDir, protectedPath) => {
+                try {
+                    const dir = Gio.File.new_for_path(cacheDir);
+                    const enumerator = dir.enumerate_children(
+                        'standard::name,time::modified',
+                        Gio.FileQueryInfoFlags.NONE,
+                        null,
+                    );
+                    const entries = [];
+                    let info;
+                    while ((info = enumerator.next_file(null)) !== null) {
+                        const name = info.get_name();
+                        if (!/^[a-f0-9]{64}\.[a-z0-9]+$/i.test(name)) continue;
+                        entries.push({
+                            file: dir.get_child(name),
+                            path: GLib.build_filenamev([cacheDir, name]),
+                            modified: Number(info.get_attribute_uint64('time::modified')) || 0,
+                        });
+                    }
+                    enumerator.close(null);
+                    entries.sort((a, b) => b.modified - a.modified);
+                    for (const entry of entries.slice(64)) {
+                        if (entry.path === protectedPath) continue;
+                        try {
+                            entry.file.delete(null);
+                        } catch (e) {
+                            // A stale cache entry is not required for preview correctness.
+                        }
+                    }
+                } catch (e) {
+                    // Cache pruning is best-effort; it must not prevent a preview.
                 }
-            }
-
-            addCandidate(artUrl);
-
-            const fitToScreen = (width, height) => {
-                // Межі прев'ю: 50 px з кожного боку монітора.
-                // Визначаємо саме розмір монітора, а не роздільну здатність
-                // початкової мініатюри: невеликі зображення також масштабуються.
-                const monitor = Main.layoutManager.primaryMonitor;
-                const stageWidth = Math.max(
-                    1,
-                    (monitor && monitor.width) || global.stage.width || 1366,
-                );
-                const stageHeight = Math.max(
-                    1,
-                    (monitor && monitor.height) || global.stage.height || 768,
-                );
-                const margin = 50;
-                const maxWidth = Math.max(1, stageWidth - margin * 2);
-                const maxHeight = Math.max(1, stageHeight - margin * 2);
-
-                // Не обмежуємо коефіцієнт одиницею: мініатюри збільшуються
-                // до максимальної області, зберігаючи співвідношення сторін.
-                const scale = Math.min(maxWidth / width, maxHeight / height);
-                return {
-                    width: Math.max(1, Math.round(width * scale)),
-                    height: Math.max(1, Math.round(height * scale)),
-                };
             };
+
+            const cacheArtworkContents = (candidate, contents) => {
+                const cacheDir = GLib.build_filenamev([
+                    GLib.get_user_cache_dir(),
+                    'media-label',
+                    'artwork-preview',
+                ]);
+                GLib.mkdir_with_parents(cacheDir, 0o700);
+
+                // Hash the bytes, not only the URL: if a server updates an image
+                // at the same URL, its cache filename changes and Shell cannot reuse
+                // a stale texture under the previous local URI.
+                const checksum = GLib.compute_checksum_for_data(
+                    GLib.ChecksumType.SHA256,
+                    contents,
+                    contents.length,
+                );
+                const withoutQuery = candidate.split(/[?#]/, 1)[0];
+                const extensionMatch = withoutQuery.match(/\.(jpe?g|png|webp|gif|avif)$/i);
+                let extension = extensionMatch
+                    ? extensionMatch[1].toLowerCase().replace('jpeg', 'jpg')
+                    : null;
+
+                // Some Chromium/NW.js MPRIS art files have no extension. Detect their
+                // common raster signatures so the CSS image loader gets a useful suffix.
+                if (!extension && contents && contents.length >= 12) {
+                    if (
+                        contents[0] === 0x89 && contents[1] === 0x50 &&
+                        contents[2] === 0x4e && contents[3] === 0x47
+                    ) extension = 'png';
+                    else if (contents[0] === 0xff && contents[1] === 0xd8 && contents[2] === 0xff)
+                        extension = 'jpg';
+                    else if (
+                        contents[0] === 0x52 && contents[1] === 0x49 &&
+                        contents[2] === 0x46 && contents[3] === 0x46 &&
+                        contents[8] === 0x57 && contents[9] === 0x45 &&
+                        contents[10] === 0x42 && contents[11] === 0x50
+                    ) extension = 'webp';
+                    else if (
+                        contents[0] === 0x47 && contents[1] === 0x49 &&
+                        contents[2] === 0x46 && contents[3] === 0x38
+                    ) extension = 'gif';
+                }
+
+                extension = extension || 'img';
+                const cachedPath = GLib.build_filenamev([cacheDir, `${checksum}.${extension}`]);
+                const cachedFile = Gio.File.new_for_path(cachedPath);
+                cachedFile.replace_contents(
+                    contents,
+                    null,
+                    false,
+                    Gio.FileCreateFlags.REPLACE_DESTINATION | Gio.FileCreateFlags.PRIVATE,
+                    null,
+                );
+                trimArtworkCache(cacheDir, cachedPath);
+                return cachedFile.get_uri();
+            };
+
+            const displayCandidate = (artwork) => {
+                if (this._closing || !this._image || !artwork) return;
+
+                let displayUrl = artwork.candidate;
+                try {
+                    displayUrl = cacheArtworkContents(artwork.candidate, artwork.contents);
+                } catch (e) {
+                    log(`Media Label: could not cache preview image; using source URL: ${e.message}`);
+                }
+
+                const safeUrl = escapeCssUrl(displayUrl);
+                this._image.set_style(`
+                    background-image: url("${safeUrl}");
+                    background-size: contain;
+                    background-repeat: no-repeat;
+                    background-position: center;
+                    border-radius: 24px;
+                `);
+                const size = fitToScreen(artwork.width, artwork.height);
+                this._image.set_size(size.width, size.height);
+            };
+
+            let bestAvailable = null;
 
             const tryCandidate = (index) => {
-                if (this._closing || !this._image || index >= candidates.length) return;
+                if (this._closing || !this._image) return;
+                if (index >= candidates.length) {
+                    // Larger candidates may fail; use the best image that did load.
+                    if (bestAvailable) displayCandidate(bestAvailable);
+                    return;
+                }
 
                 const candidate = candidates[index];
                 let file;
@@ -227,75 +299,61 @@ export const ArtPreview = GObject.registerClass(
                                 return;
                             }
 
-                            // Для TMDB не завантажуємо оригінал без потреби.
-                            // Спочатку визначаємо розмір, який реально займатиме
-                            // картинка, і додаємо 5% запасу для чіткості.
-                            if (tmdbMatch) {
-                                const displaySize = fitToScreen(width, height);
-                                const requiredWidth = Math.ceil(displaySize.width * 1.05);
-                                const requiredHeight = Math.ceil(displaySize.height * 1.05);
+                            const displaySize = fitToScreen(width, height);
 
-                                if (width < requiredWidth || height < requiredHeight) {
-                                    const scaleNeeded = Math.max(
-                                        requiredWidth / width,
-                                        requiredHeight / height,
-                                    );
-                                    const neededSourceWidth = Math.ceil(width * scaleNeeded);
-
-                                    // Одразу переходимо до найменшого більшого варіанта,
-                                    // пропускаючи розміри, яких уже недостатньо.
-                                    const nextSuitableIndex = candidates.findIndex(
-                                        (url, candidateIndex) => {
-                                            if (candidateIndex <= index)
-                                                return false;
-
-                                            const sizeMatch = url.match(
-                                                /\/t\/p\/w(\d+)\//i,
-                                            );
-
-                                            if (sizeMatch)
-                                                return Number(sizeMatch[1]) >= neededSourceWidth;
-
-                                            return /\/t\/p\/original\//i.test(url);
-                                        },
-                                    );
-
-                                    if (nextSuitableIndex >= 0) {
-                                        tryCandidate(nextSuitableIndex);
-                                        return;
-                                    }
-                                    // Якщо більших варіантів немає, використовуємо
-                                    // найкраще доступне зображення.
-                                }
-                            }
-
-                            // maxresdefault іноді повертає маленький placeholder замість
-                            // помилки HTTP. Не приймаємо його за якісний thumbnail.
+                            // Reject tiny YouTube placeholder images before they become fallback candidates.
                             if (isYouTubeThumbnail) {
-                                const minimumWidth = candidate.includes('/maxresdefault.') ? 800
-                                    : candidate.includes('/sddefault.') ? 500
-                                    : candidate.includes('/hqdefault.') ? 320
-                                    : candidate.includes('/mqdefault.') ? 200
-                                    : 1;
+                                const minimumWidth = getYouTubeMinimumWidth(candidate);
                                 if (width < minimumWidth) {
                                     tryCandidate(index + 1);
                                     return;
                                 }
                             }
 
-                            const safeUrl = candidate
-                                .replace(/\\/g, '\\\\')
-                                .replace(/"/g, '\\"');
-                            this._image.set_style(`
-                                background-image: url("${safeUrl}");
-                                background-size: contain;
-                                background-repeat: no-repeat;
-                                background-position: center;
-                                border-radius: 24px;
-                            `);
+                            const currentArtwork = {
+                                candidate,
+                                width,
+                                height,
+                                contents,
+                            };
 
-                            const size = fitToScreen(width, height);
-                            this._image.set_size(size.width, size.height);
+                            // Keep the highest-resolution successful image so a failed escalation
+                            // never leaves the preview blank when a usable smaller image exists.
+                            if (
+                                !bestAvailable ||
+                                width * height > bestAvailable.width * bestAvailable.height
+                            ) {
+                                bestAvailable = currentArtwork;
+                            }
+
+                            if (
+                                isTmdbArtwork &&
+                                !isArtworkResolutionEnough(width, height, displaySize, 1.05)
+                            ) {
+                                const neededSourceWidth = getRequiredSourceWidth(
+                                    width,
+                                    height,
+                                    displaySize,
+                                    1.05,
+                                );
+                                const nextSuitableIndex = findNextSuitableTmdbCandidate(
+                                    candidates,
+                                    index,
+                                    neededSourceWidth,
+                                );
+
+                                if (nextSuitableIndex >= 0) {
+                                    tryCandidate(nextSuitableIndex);
+                                    return;
+                                }
+                                // No larger candidate is available; show the best one already loaded.
+                                displayCandidate(bestAvailable);
+                                return;
+                            }
+
+                            // Render from the downloaded bytes via a local cache URL. This avoids
+                            // another network fetch when the CSS background is decoded by St.
+                            displayCandidate(currentArtwork);
                         } catch (e) {
                             // Кандидат не є придатним зображенням або не читається — пробуємо наступний.
                             tryCandidate(index + 1);

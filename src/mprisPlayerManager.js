@@ -22,6 +22,7 @@ export class MprisPlayerManager {
         this._delegate = delegate;
         this._isDestroyed = false;
         this._players = new Map();
+        this._nameOwnerChangedSignalId = null;
 
         this._initDBus();
     }
@@ -42,7 +43,7 @@ export class MprisPlayerManager {
             },
         );
 
-        this.dBusProxy.connectSignal(
+        this._nameOwnerChangedSignalId = this.dBusProxy.connectSignal(
             'NameOwnerChanged',
             (proxy, sender, [name, oldOwner, newOwner]) => {
                 if (!name.startsWith('org.mpris.MediaPlayer2')) return;
@@ -270,10 +271,18 @@ export class MprisPlayerManager {
     }
 
     destroy() {
+        if (this._isDestroyed) return;
         this._isDestroyed = true;
+
+        if (this.dBusProxy && this._nameOwnerChangedSignalId) {
+            this.dBusProxy.disconnectSignal(this._nameOwnerChangedSignalId);
+            this._nameOwnerChangedSignalId = null;
+        }
+
         for (const [, entry] of this._players) {
             if (entry.propId && entry.proxy) entry.proxy.disconnect(entry.propId);
         }
         this._players.clear();
+        this.dBusProxy = null;
     }
 }
