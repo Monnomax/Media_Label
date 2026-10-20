@@ -51,7 +51,7 @@ export const ArtPreview = GObject.registerClass(
                 height: imgH,
                 style: `
                     background-image: url("${artUrl}");
-                    background-size: cover;
+                    background-size: contain;
                     background-repeat: no-repeat;
                     background-position: center;
                     border-radius: 24px;
@@ -112,60 +112,157 @@ export const ArtPreview = GObject.registerClass(
         }
 
         _loadDimensionsAsync(artUrl) {
-            if (!artUrl) return;
+            if (!artUrl || !this._image) return;
 
-            try {
-                let file;
-                if (artUrl.startsWith('file://')) {
-                    file = Gio.File.new_for_uri(artUrl);
-                } else if (artUrl.startsWith('/')) {
-                    file = Gio.File.new_for_path(artUrl);
+            // Спочатку пробуємо найбільші відомі варіанти. Якщо CDN їх не має,
+            // послідовно переходимо до меншого варіанта й наприкінці — до URL MPRIS.
+            const candidates = [];
+            const addCandidate = (url) => {
+                if (url && !candidates.includes(url)) candidates.push(url);
+            };
+            let isYouTubeThumbnail = false;
+            const youtubeMatch = artUrl.match(
+                /^(https?:\/\/(?:i\.ytimg\.com|img\.youtube\.com)\/vi(?:_webp)?\/[^/]+\/)([^/?#]+)(\.(?:jpg|jpeg|png|webp))(?:[?#].*)?$/i,
+            );
+
+            if (youtubeMatch) {
+                isYouTubeThumbnail = true;
+                const prefix = youtubeMatch[1];
+                const extension = youtubeMatch[3];
+                addCandidate(`${prefix}maxresdefault${extension}`);
+                addCandidate(`${prefix}sddefault${extension}`);
+                addCandidate(`${prefix}hqdefault${extension}`);
+                addCandidate(`${prefix}mqdefault${extension}`);
+                addCandidate(`${prefix}default${extension}`);
+            }
+
+            // TMDB офіційно підтримує розмір original; якщо він недоступний,
+            // перевіряємо типові великі розміри й лише тоді повертаємося до MPRIS URL.
+            const tmdbMatch = artUrl.match(
+                /^(https?:\/\/image\.tmdb\.org\/t\/p\/)([^/]+)(\/[^?#]+)([?#].*)?$/i,
+            );
+            if (tmdbMatch) {
+                const base = tmdbMatch[1];
+                const path = tmdbMatch[3];
+                const query = tmdbMatch[4] || '';
+                for (const size of ['original', 'w1280', 'w780', 'w500', 'w342', 'w185'])
+                    addCandidate(`${base}${size}${path}${query}`);
+            }
+
+            // YouTube Music та деякі інші сервіси використовують Google image CDN,
+            // де розмір заданий суфіксом на кшталт =w120-h120-l90-rj.
+            const googleHost = /^https?:\/\/(?:yt3\.ggpht\.com|lh\d+\.googleusercontent\.com)\//i.test(artUrl);
+            if (googleHost) {
+                const suffixMatch = artUrl.match(/^(https?:\/\/[^?#]+?)(?:=w\d+-h\d+[^/?#]*|=s\d+[^/?#]*)([?#].*)?$/i);
+                if (suffixMatch) {
+                    const base = suffixMatch[1];
+                    const query = suffixMatch[2] || '';
+                    addCandidate(`${base}=w1600-h1600${query}`);
+                    addCandidate(`${base}=w1200-h1200${query}`);
+                    addCandidate(`${base}=w800-h800${query}`);
                 }
-                
-                if (!file) return;
+            }
 
-                // Читаємо вміст асинхронно у фоновому потоці GLib, не фризячи рендеринг GNOME Shell
-                file.load_contents_async(null, (f, res) => {
-                    try {
-                        let [success, contents] = f.load_contents_finish(res);
-                        if (success && contents && contents.length > 0) {
-                            let loader = new GdkPixbuf.PixbufLoader();
+            addCandidate(artUrl);
+
+            const fitToScreen = (width, height) => {
+                // Межі прев'ю: 50 px з кожного боку монітора.
+                // Визначаємо саме розмір монітора, а не роздільну здатність
+                // початкової мініатюри: невеликі зображення також масштабуються.
+                const monitor = Main.layoutManager.primaryMonitor;
+                const stageWidth = Math.max(
+                    1,
+                    (monitor && monitor.width) || global.stage.width || 1366,
+                );
+                const stageHeight = Math.max(
+                    1,
+                    (monitor && monitor.height) || global.stage.height || 768,
+                );
+                const margin = 50;
+                const maxWidth = Math.max(1, stageWidth - margin * 2);
+                const maxHeight = Math.max(1, stageHeight - margin * 2);
+
+                // Не обмежуємо коефіцієнт одиницею: мініатюри збільшуються
+                // до максимальної області, зберігаючи співвідношення сторін.
+                const scale = Math.min(maxWidth / width, maxHeight / height);
+                return {
+                    width: Math.max(1, Math.round(width * scale)),
+                    height: Math.max(1, Math.round(height * scale)),
+                };
+            };
+
+            const tryCandidate = (index) => {
+                if (this._closing || !this._image || index >= candidates.length) return;
+
+                const candidate = candidates[index];
+                let file;
+                try {
+                    file = candidate.startsWith('/')
+                        ? Gio.File.new_for_path(candidate)
+                        : Gio.File.new_for_uri(candidate);
+                    file.load_contents_async(null, (f, res) => {
+                        if (this._closing || !this._image) return;
+                        try {
+                            const [success, contents] = f.load_contents_finish(res);
+                            if (!success || !contents || contents.length === 0) {
+                                tryCandidate(index + 1);
+                                return;
+                            }
+
+                            const loader = new GdkPixbuf.PixbufLoader();
                             loader.write(contents);
                             loader.close();
-                            
-                            let fullPixbuf = loader.get_pixbuf();
-                            if (fullPixbuf) {
-                                let width = fullPixbuf.get_width();
-                                let height = fullPixbuf.get_height();
-                                
-                                if (width && height) {
-                                    const MAX_SIZE = 560;
-                                    let ratio = width / height;
-                                    let imgW = MAX_SIZE;
-                                    let imgH = MAX_SIZE;
+                            const pixbuf = loader.get_pixbuf();
+                            if (!pixbuf) {
+                                tryCandidate(index + 1);
+                                return;
+                            }
 
-                                    if (ratio > 1) { 
-                                        // Ландшафтне зображення (широке)
-                                        imgH = Math.round(MAX_SIZE / ratio);
-                                    } else { 
-                                        // Портретне зображення (постери фільмів)
-                                        imgW = Math.round(MAX_SIZE * ratio);
-                                    }
+                            const width = pixbuf.get_width();
+                            const height = pixbuf.get_height();
+                            if (!width || !height) {
+                                tryCandidate(index + 1);
+                                return;
+                            }
 
-                                    // Безпечно оновлюємо розміри віджета, якщо користувач ще не встиг закрити прев'ю
-                                    if (this._image && !this._closing) {
-                                        this._image.set_size(imgW, imgH);
-                                    }
+                            // maxresdefault іноді повертає маленький placeholder замість
+                            // помилки HTTP. Не приймаємо його за якісний thumbnail.
+                            if (isYouTubeThumbnail) {
+                                const minimumWidth = candidate.includes('/maxresdefault.') ? 800
+                                    : candidate.includes('/sddefault.') ? 500
+                                    : candidate.includes('/hqdefault.') ? 320
+                                    : candidate.includes('/mqdefault.') ? 200
+                                    : 1;
+                                if (width < minimumWidth) {
+                                    tryCandidate(index + 1);
+                                    return;
                                 }
                             }
+
+                            const safeUrl = candidate
+                                .replace(/\\/g, '\\\\')
+                                .replace(/"/g, '\\"');
+                            this._image.set_style(`
+                                background-image: url("${safeUrl}");
+                                background-size: contain;
+                                background-repeat: no-repeat;
+                                background-position: center;
+                                border-radius: 24px;
+                            `);
+
+                            const size = fitToScreen(width, height);
+                            this._image.set_size(size.width, size.height);
+                        } catch (e) {
+                            // Кандидат не є придатним зображенням або не читається — пробуємо наступний.
+                            tryCandidate(index + 1);
                         }
-                    } catch (e) {
-                        console.warn(`[ArtPreview] Не вдалося обробити асинхронні дані обкладинки: ${e}`);
-                    }
-                });
-            } catch (e) {
-                console.warn(`[ArtPreview] Не вдалося ініціювати асинхронне читання: ${e}`);
-            }
+                    });
+                } catch (e) {
+                    tryCandidate(index + 1);
+                }
+            };
+
+            tryCandidate(0);
         }
 
         _getAnimationData() {

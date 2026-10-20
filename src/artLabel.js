@@ -56,13 +56,71 @@ export const CairoRoundedArt = GObject.registerClass(
                     this._indicator &&
                     this._indicator._currentArtUrl
                 ) {
-                    const url = this._indicator._currentArtUrl;
-                    const settings = this._indicator._settings;
-                    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 50, () => {
-                        new ArtPreview(url, settings);
-                        return GLib.SOURCE_REMOVE;
-                    });
+                    const indicator = this._indicator;
+                    const mprisArtUrl = indicator._currentArtUrl;
+                    const settings = indicator._settings;
+
+                    const openPreview = (url) => {
+                        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 50, () => {
+                            new ArtPreview(url, settings);
+                            return GLib.SOURCE_REMOVE;
+                        });
+                    };
+
+                    // Спеціальний шлях лише для тимчасової обкладинки Lampa/NW.js.
+                    // Інші плеєри продовжують використовувати свій MPRIS URL.
+                    const isLampaArt =
+                        String(indicator._currentPlayerAddress || '')
+                            .startsWith('org.mpris.MediaPlayer2.chromium') &&
+                        /^file:\/\/\/tmp\/\.io\.nwjs\./i.test(mprisArtUrl);
+
+                    if (!isLampaArt) {
+                        openPreview(mprisArtUrl);
+                    } else {
+                        const posterFile = Gio.File.new_for_path(
+                            GLib.build_filenamev([
+                                GLib.get_home_dir(),
+                                'bin',
+                                'LampaUncensoredLinux',
+                                'lampa-poster-url.txt',
+                            ]),
+                        );
+
+                        posterFile.load_contents_async(null, (file, result) => {
+                            let previewUrl = mprisArtUrl;
+
+                            try {
+                                const [success, contents] =
+                                    file.load_contents_finish(result);
+
+                                if (success && contents) {
+                                    const candidate =
+                                        new TextDecoder('utf-8')
+                                            .decode(contents)
+                                            .trim();
+
+                                    // Приймаємо лише прямі адреси зображень TMDB.
+                                    if (
+                                        /^https:\/\/image\.tmdb\.org\/t\/p\/(?:original|w\d+)\/[^?#]+(?:[?#].*)?$/i
+                                            .test(candidate)
+                                    ) {
+                                        previewUrl = candidate.replace(
+                                            /\/t\/p\/(?:original|w\d+)\//i,
+                                            '/t/p/original/',
+                                        );
+                                    }
+                                }
+                            } catch (e) {
+                                log(
+                                    `Media Label: не вдалося прочитати URL постера Lampa: ${e.message}`,
+                                );
+                            }
+
+                            openPreview(previewUrl);
+                        });
+                    }
                 }
+
                 return Clutter.EVENT_STOP;
             });
 
