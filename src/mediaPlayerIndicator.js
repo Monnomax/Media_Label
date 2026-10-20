@@ -12,12 +12,13 @@ import { CairoRoundedArt } from "./artLabel.js";
 import { SeekOverlay } from "./seekOverlay.js";
 import { SeekController } from "./seekController.js";
 import { ProgressController } from "./progressController.js";
-import { buildTrackKey, getArtworkUrl, getTrackLength } from "./metadataUtils.js";
 import { DisplayMode } from "./constants.js";
 import { PaletteManager } from "./paletteManager.js";
 import { MprisPlayerManager } from "./mprisPlayerManager.js";
 import { DetailedPlayerWindow } from "./detailedPlayerWindow.js";
 import { calculatePanelProgressGeometry, paintPanelProgress } from "./panelProgress.js";
+
+import { updateMetadata } from "./metadataController.js";
 
 export const MediaPlayerIndicator = GObject.registerClass(
     { GTypeName: "MediaPlayerIndicator" },
@@ -728,78 +729,7 @@ export const MediaPlayerIndicator = GObject.registerClass(
         }
 
         _updateMetadata() {
-            if (!this._playerProxy) return;
-
-            try {
-                let metadataVariant =
-                    this._playerProxy.get_cached_property("Metadata");
-                if (!metadataVariant && this._playerProxy.Metadata) {
-                    metadataVariant = this._playerProxy.Metadata;
-                }
-
-                if (!metadataVariant) {
-                    this.trackLabel.set_text("Очікування даних...");
-                    return;
-                }
-
-                let metadata = metadataVariant.recursiveUnpack
-                    ? metadataVariant.recursiveUnpack()
-                    : metadataVariant.deep_unpack();
-
-                this.trackLabel.updateFromMetadata(metadata);
-
-                // Оновлюємо дані у детальному вікні
-                const appId = this._playerManager.getAppIdentifier(
-                    this._currentPlayerAddress,
-                );
-                if (this._detailedWindow) {
-                    this._detailedWindow.updateInfo(metadata, appId);
-                }
-
-                // Ідентифікуємо саме трек, а не адресу MPRIS-плеєра.
-                // Деякі плеєри повторно використовують адресу для всього списку.
-                const trackKey = buildTrackKey(metadata);
-
-                if (
-                    this._currentTrackKey !== null &&
-                    trackKey !== this._currentTrackKey
-                ) {
-                    // Не чекаємо, поки зникне таймкод після прокручування.
-                    // _resetSeekState також скасовує старий таймер таймкоду.
-                    this._resetSeekState();
-                    this._panelProgressPosition = 0;
-                }
-                this._currentTrackKey = trackKey;
-
-                this._seekLength = getTrackLength(metadata);
-                this._updatePanelProgressFill(
-                    this._panelProgressPosition,
-                    this._seekLength,
-                );
-                if (this._seekActive) {
-                    this.seekOverlay.updateProgress(
-                        this._seekPosition,
-                        this._seekLength,
-                    );
-                    this._syncSeekWidth();
-                }
-
-                const artUrl = getArtworkUrl(metadata);
-                this._currentArtUrl = artUrl;
-                const radius = this._settings.get_int("album-radius");
-
-                if (
-                    this.albumArt &&
-                    typeof this.albumArt.updateArt === "function"
-                ) {
-                    this.albumArt.updateArt(artUrl, radius);
-                }
-
-                this._applyCustomStyles();
-            } catch (e) {
-                this.trackLabel.set_text(`Помилка: ${e.message}`);
-                log(`MPRIS Metadata Error: ${e.message}`);
-            }
+            updateMetadata.call(this);
         }
 
         _updateVisibility() {
