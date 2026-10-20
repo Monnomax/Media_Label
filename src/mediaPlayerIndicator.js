@@ -11,6 +11,7 @@ import { TrackLabel } from "./textLabel.js";
 import { CairoRoundedArt } from "./artLabel.js";
 import { SeekOverlay } from "./seekOverlay.js";
 import { SeekController } from "./seekController.js";
+import { ProgressController } from "./progressController.js";
 import { DisplayMode } from "./constants.js";
 import { PaletteManager } from "./paletteManager.js";
 import { MprisPlayerManager } from "./mprisPlayerManager.js";
@@ -247,6 +248,7 @@ export const MediaPlayerIndicator = GObject.registerClass(
             // лише під час відкритого меню, щоб не смітити D-Bus запитами
             // постійно у фоні.
             this._detailedProgressTimeoutId = null;
+            this._progressController = new ProgressController(this);
             this.menu.connect("open-state-changed", (_menu, isOpen) => {
                 // Поки попап відкритий, кнопка має виглядати "натиснутою"
                 // незалежно від того, де зараз курсор.
@@ -254,22 +256,7 @@ export const MediaPlayerIndicator = GObject.registerClass(
                 this._syncThemeButtonPseudoClasses();
                 this._updateBackground();
 
-                if (isOpen) {
-                    this._pollDetailedProgress();
-                    if (!this._detailedProgressTimeoutId) {
-                        this._detailedProgressTimeoutId = GLib.timeout_add(
-                            GLib.PRIORITY_DEFAULT,
-                            1000,
-                            () => {
-                                this._pollDetailedProgress();
-                                return GLib.SOURCE_CONTINUE;
-                            },
-                        );
-                    }
-                } else if (this._detailedProgressTimeoutId) {
-                    GLib.source_remove(this._detailedProgressTimeoutId);
-                    this._detailedProgressTimeoutId = null;
-                }
+                this._progressController.setDetailedProgressPolling(isOpen);
             });
 
             // Замість підключення лише до першого знайденого плеєра, менеджер
@@ -442,89 +429,19 @@ export const MediaPlayerIndicator = GObject.registerClass(
          * позицію напряму. Під час перемотування зберігаємо локальний відгук.
          */
         async _pollPanelProgress() {
-            if (
-                this._isDestroyed ||
-                this._seekActive ||
-                !this._currentPlayerAddress ||
-                !this._playerManager ||
-                this._panelProgressPollInFlight
-            )
-                return;
-
-            const address = this._currentPlayerAddress;
-            this._panelProgressPollInFlight = true;
-            try {
-                const position = await this._playerManager.getPosition(address);
-                if (
-                    this._isDestroyed ||
-                    address !== this._currentPlayerAddress ||
-                    this._seekActive ||
-                    position === null
-                )
-                    return;
-
-                this._panelProgressPosition = Math.max(0, Number(position) || 0);
-                this._updatePanelProgressFill(
-                    this._panelProgressPosition,
-                    this._seekLength,
-                );
-            } finally {
-                this._panelProgressPollInFlight = false;
-            }
+            return this._progressController.pollPanelProgress();
         }
 
-        /** Опитуємо позицію кожні 100 мс лише під час відтворення. */
         _startPanelProgressPolling() {
-            if (this._isDestroyed || this._panelProgressTimeoutId) return;
-            this._pollPanelProgress();
-            this._panelProgressTimeoutId = GLib.timeout_add(
-                GLib.PRIORITY_DEFAULT,
-                100,
-                () => {
-                    if (
-                        this._isDestroyed ||
-                        !this._currentPlayerAddress ||
-                        !this._playerProxy ||
-                        this._playerProxy.PlaybackStatus !== "Playing"
-                    ) {
-                        this._panelProgressTimeoutId = null;
-                        return GLib.SOURCE_REMOVE;
-                    }
-                    this._pollPanelProgress();
-                    return GLib.SOURCE_CONTINUE;
-                },
-            );
+            this._progressController.startPanelProgressPolling();
         }
 
         _stopPanelProgressPolling() {
-            if (this._panelProgressTimeoutId) {
-                GLib.source_remove(this._panelProgressTimeoutId);
-                this._panelProgressTimeoutId = null;
-            }
+            this._progressController.stopPanelProgressPolling();
         }
 
-        /**
-         * "Тік" живого опитування позиції для прогрес-бару в попапі —
-         * викликається раз на секунду, поки меню відкрите (див. підписку
-         * на 'open-state-changed' вище). Під час активного seek-жесту на
-         * кнопці панелі (_seekActive) пропускаємо опитування, щоб не
-         * "битись" за той самий стан із _handleSeekScroll/_syncSeekPosition.
-         */
         async _pollDetailedProgress() {
-            if (this._isDestroyed || !this._detailedWindow) return;
-            if (this._seekActive) return;
-            if (!this._currentPlayerAddress) return;
-
-            const position = await this._playerManager.getPosition(
-                this._currentPlayerAddress,
-            );
-            if (this._isDestroyed || !this._detailedWindow) return;
-            if (position === null) return;
-
-            this._detailedWindow.updateProgress(
-                position,
-                this._seekLength || 0,
-            );
+            return this._progressController.pollDetailedProgress();
         }
 
         /**
@@ -929,10 +846,7 @@ export const MediaPlayerIndicator = GObject.registerClass(
                 GLib.source_remove(this._seekHideTimeoutId);
                 this._seekHideTimeoutId = null;
             }
-            if (this._detailedProgressTimeoutId) {
-                GLib.source_remove(this._detailedProgressTimeoutId);
-                this._detailedProgressTimeoutId = null;
-            }
+            if (this._progressController) this._progressController.stopDetailedProgressPolling();
             this._stopPanelProgressPolling();
             if (this._settingsId) this._settings.disconnect(this._settingsId);
             if (this._playersSettingsId)
