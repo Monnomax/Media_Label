@@ -104,7 +104,7 @@ export function applyCustomStyles(DisplayMode) {
             }
 
             this.layout.set_style(`
-                padding-left: ${cssPaddingLeft}px; 
+                padding-left: ${cssPaddingLeft}px;
                 padding-right: ${cssPaddingRight}px;
                 spacing: ${cssSpacing}px;
             `);
