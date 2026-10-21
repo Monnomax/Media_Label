@@ -8,16 +8,13 @@ export async function fetchLyrics(artist, title) {
 
     return new Promise((resolve) => {
         try {
-            // Беремо лише першого виконавця, якщо їх декілька, для більшої точності пошуку
             const queryArtist = encodeURIComponent(artist.split(",")[0].trim());
             const queryTitle = encodeURIComponent(title.trim());
 
-            // Формуємо URL для lrclib.net
             const url = `https://lrclib.net/api/get?artist_name=${queryArtist}&track_name=${queryTitle}`;
 
             const message = Soup.Message.new("GET", url);
 
-            // LRCLIB просить передавати User-Agent для ідентифікації застосунків
             message
                 .get_request_headers()
                 .append("User-Agent", "GNOME-Shell-Media-Label-Extension");
@@ -35,7 +32,6 @@ export async function fetchLyrics(artist, title) {
                             const text = decoder.decode(bytes.get_data());
                             const json = JSON.parse(text);
 
-                            // LRCLIB повертає текст у plainLyrics. Якщо його немає, беремо syncedLyrics.
                             if (json && json.plainLyrics) {
                                 resolve(json.plainLyrics.trim());
                             } else if (json && json.syncedLyrics) {
@@ -44,7 +40,6 @@ export async function fetchLyrics(artist, title) {
                                 resolve(null);
                             }
                         } else {
-                            // Трек не знайдено або помилка сервера (наприклад, 404)
                             resolve(null);
                         }
                     } catch (e) {

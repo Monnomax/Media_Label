@@ -1,7 +1,3 @@
-/**
- * Pure helpers for artwork URL selection and preview sizing.
- * Kept independent from GNOME/GIO so the selection logic can be tested with Node.
- */
 export function buildArtworkCandidates(artUrl) {
     const candidates = [];
     const addCandidate = (url) => {
@@ -30,18 +26,29 @@ export function buildArtworkCandidates(artUrl) {
     if (tmdbMatch) {
         const base = tmdbMatch[1];
         const path = tmdbMatch[3];
-        const query = tmdbMatch[4] || '';
-        // Try a small probe first. Escalate only if its pixels are insufficient.
-        for (const size of ['w185', 'w342', 'w500', 'w780', 'w1280', 'original'])
+        const query = tmdbMatch[4] || "";
+        for (const size of [
+            "w185",
+            "w342",
+            "w500",
+            "w780",
+            "w1280",
+            "original",
+        ])
             addCandidate(`${base}${size}${path}${query}`);
     }
 
-    const googleHost = /^https?:\/\/(?:yt3\.ggpht\.com|lh\d+\.googleusercontent\.com)\//i.test(artUrl);
+    const googleHost =
+        /^https?:\/\/(?:yt3\.ggpht\.com|lh\d+\.googleusercontent\.com)\//i.test(
+            artUrl,
+        );
     if (googleHost) {
-        const suffixMatch = artUrl.match(/^(https?:\/\/[^?#]+?)(?:=w\d+-h\d+[^/?#]*|=s\d+[^/?#]*)([?#].*)?$/i);
+        const suffixMatch = artUrl.match(
+            /^(https?:\/\/[^?#]+?)(?:=w\d+-h\d+[^/?#]*|=s\d+[^/?#]*)([?#].*)?$/i,
+        );
         if (suffixMatch) {
             const base = suffixMatch[1];
-            const query = suffixMatch[2] || '';
+            const query = suffixMatch[2] || "";
             addCandidate(`${base}=w1600-h1600${query}`);
             addCandidate(`${base}=w1200-h1200${query}`);
             addCandidate(`${base}=w800-h800${query}`);
@@ -56,7 +63,13 @@ export function buildArtworkCandidates(artUrl) {
     };
 }
 
-export function fitArtworkToScreen(width, height, stageWidth, stageHeight, margin = 50) {
+export function fitArtworkToScreen(
+    width,
+    height,
+    stageWidth,
+    stageHeight,
+    margin = 50,
+) {
     const maxWidth = Math.max(1, stageWidth - margin * 2);
     const maxHeight = Math.max(1, stageHeight - margin * 2);
     const scale = Math.min(maxWidth / width, maxHeight / height);
@@ -66,18 +79,36 @@ export function fitArtworkToScreen(width, height, stageWidth, stageHeight, margi
     };
 }
 
-export function isArtworkResolutionEnough(width, height, displaySize, oversampling = 1.05) {
-    return width >= Math.ceil(displaySize.width * oversampling) &&
-        height >= Math.ceil(displaySize.height * oversampling);
+export function isArtworkResolutionEnough(
+    width,
+    height,
+    displaySize,
+    oversampling = 1.05,
+) {
+    return (
+        width >= Math.ceil(displaySize.width * oversampling) &&
+        height >= Math.ceil(displaySize.height * oversampling)
+    );
 }
 
-export function getRequiredSourceWidth(width, height, displaySize, oversampling = 1.05) {
+export function getRequiredSourceWidth(
+    width,
+    height,
+    displaySize,
+    oversampling = 1.05,
+) {
     const requiredWidth = Math.ceil(displaySize.width * oversampling);
     const requiredHeight = Math.ceil(displaySize.height * oversampling);
-    return Math.ceil(width * Math.max(requiredWidth / width, requiredHeight / height));
+    return Math.ceil(
+        width * Math.max(requiredWidth / width, requiredHeight / height),
+    );
 }
 
-export function findNextSuitableTmdbCandidate(candidates, currentIndex, neededSourceWidth) {
+export function findNextSuitableTmdbCandidate(
+    candidates,
+    currentIndex,
+    neededSourceWidth,
+) {
     return candidates.findIndex((url, candidateIndex) => {
         if (candidateIndex <= currentIndex) return false;
         const sizeMatch = url.match(/\/t\/p\/w(\d+)\//i);
@@ -87,13 +118,13 @@ export function findNextSuitableTmdbCandidate(candidates, currentIndex, neededSo
 }
 
 export function getYouTubeMinimumWidth(candidate) {
-    if (candidate.includes('/maxresdefault.')) return 800;
-    if (candidate.includes('/sddefault.')) return 500;
-    if (candidate.includes('/hqdefault.')) return 320;
-    if (candidate.includes('/mqdefault.')) return 200;
+    if (candidate.includes("/maxresdefault.")) return 800;
+    if (candidate.includes("/sddefault.")) return 500;
+    if (candidate.includes("/hqdefault.")) return 320;
+    if (candidate.includes("/mqdefault.")) return 200;
     return 1;
 }
 
 export function escapeCssUrl(url) {
-    return url.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    return url.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }

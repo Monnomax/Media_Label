@@ -1,9 +1,5 @@
 import GLib from "gi://GLib";
 
-/**
- * Owns polling timers and position synchronization for the panel and detailed player view.
- * The indicator remains the source of player/session state and of the rendered UI.
- */
 export class ProgressController {
     constructor(indicator) {
         this._indicator = indicator;
@@ -23,7 +19,8 @@ export class ProgressController {
         const address = indicator._currentPlayerAddress;
         indicator._panelProgressPollInFlight = true;
         try {
-            const position = await indicator._playerManager.getPosition(address);
+            const position =
+                await indicator._playerManager.getPosition(address);
             if (
                 indicator._isDestroyed ||
                 address !== indicator._currentPlayerAddress ||
@@ -32,7 +29,10 @@ export class ProgressController {
             )
                 return;
 
-            indicator._panelProgressPosition = Math.max(0, Number(position) || 0);
+            indicator._panelProgressPosition = Math.max(
+                0,
+                Number(position) || 0,
+            );
             indicator._updatePanelProgressFill(
                 indicator._panelProgressPosition,
                 indicator._seekLength,

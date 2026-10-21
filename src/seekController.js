@@ -3,11 +3,6 @@ import Gio from "gi://Gio";
 import GLib from "gi://GLib";
 import { calculateSeekPosition } from "./seekUtils.js";
 
-/**
- * Encapsulates seek interaction and its transient overlay state.
- * The indicator remains the owner of player/session state and UI actors;
- * this controller coordinates those existing objects without changing their API.
- */
 export class SeekController {
     constructor(indicator) {
         this._indicator = indicator;
@@ -39,15 +34,12 @@ export class SeekController {
 
         this.resetSeekHideTimer();
 
-        // At the beginning of a seek session the local position is unknown.
-        // Query the actual player position asynchronously and correct the base.
         if (indicator._seekPositionUnknown) {
             indicator._seekPositionUnknown = false;
             this.syncSeekPosition(indicator._currentPlayerAddress);
         }
     }
 
-    /** Switches from the track label to the seek overlay with a crossfade. */
     enterSeekMode() {
         const indicator = this._indicator;
         indicator._seekActive = true;
@@ -76,7 +68,6 @@ export class SeekController {
         });
     }
 
-    /** Returns from the seek overlay to the track label with a crossfade. */
     exitSeekMode() {
         const indicator = this._indicator;
         if (!indicator._seekActive) return;
@@ -91,7 +82,8 @@ export class SeekController {
             duration: 200,
             mode: Clutter.AnimationMode.EASE_OUT_QUAD,
             onComplete: () => {
-                if (!indicator._isDestroyed) indicator.seekOverlay.visible = false;
+                if (!indicator._isDestroyed)
+                    indicator.seekOverlay.visible = false;
             },
         });
 
@@ -103,7 +95,6 @@ export class SeekController {
         });
     }
 
-    /** Resets the seek session immediately when the active player or track changes. */
     resetSeekState() {
         const indicator = this._indicator;
         if (indicator._seekHideTimeoutId) {
@@ -126,21 +117,27 @@ export class SeekController {
         }
     }
 
-    /** Keeps the panel button wide enough for the current timecode. */
     syncSeekWidth() {
         const indicator = this._indicator;
-        if (indicator._isDestroyed || !indicator.seekOverlay || !indicator.trackLabel)
+        if (
+            indicator._isDestroyed ||
+            !indicator.seekOverlay ||
+            !indicator.trackLabel
+        )
             return;
-        indicator.trackLabel.growToFit(indicator.seekOverlay.getRequiredWidth());
+        indicator.trackLabel.growToFit(
+            indicator.seekOverlay.getRequiredWidth(),
+        );
     }
 
-    /** Restarts the auto-hide timer for the seek timecode. */
     resetSeekHideTimer() {
         const indicator = this._indicator;
         if (indicator._seekHideTimeoutId) {
             GLib.source_remove(indicator._seekHideTimeoutId);
         }
-        const hideDelayMs = indicator._settings.get_int("seek-timecode-duration");
+        const hideDelayMs = indicator._settings.get_int(
+            "seek-timecode-duration",
+        );
         indicator._seekHideTimeoutId = GLib.timeout_add(
             GLib.PRIORITY_DEFAULT,
             hideDelayMs,
@@ -152,7 +149,6 @@ export class SeekController {
         );
     }
 
-    /** Queries MPRIS Position directly because Position is not signalled continuously. */
     async syncSeekPosition(address) {
         const indicator = this._indicator;
         try {
@@ -193,7 +189,6 @@ export class SeekController {
                 this.syncSeekWidth();
             }
         } catch (e) {
-            // Some players do not expose Position; retain the locally calculated position.
             log(`MPRIS Position query error: ${e.message}`);
         }
     }

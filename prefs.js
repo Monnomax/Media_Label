@@ -258,9 +258,6 @@ export default class MprisLabelPreferences extends ExtensionPreferences {
             return button;
         };
 
-        // ==========================================
-        // СТОРІНКА 1: Лейбл
-        // ==========================================
         const page = new Adw.PreferencesPage({
             title: "Лейбл",
             icon_name: "document-metadata-symbolic",
@@ -396,12 +393,6 @@ export default class MprisLabelPreferences extends ExtensionPreferences {
         });
         page.add(buttonPositionGroup);
 
-        // ВАЖЛИВО: ключ "panel-position" у gschema має тип "i" (int) —
-        // це той самий індекс, який extension.js напряму використовує
-        // для вибору positions[index] ('left'/'center'/'right'). Дропдаун
-        // тут мусить читати/писати його як int, а не як рядок з назвою
-        // пункту меню — інакше get_string/set_string на int-ключі не
-        // відповідають схемі, і значення фізично ніколи не записується.
         const positionNames = ["Зліва", "По центру", "Справа"];
         let positionIdx = settings.get_int("panel-position");
         if (positionIdx < 0 || positionIdx >= positionNames.length)
@@ -488,7 +479,6 @@ export default class MprisLabelPreferences extends ExtensionPreferences {
         marqueeDelayEndRow.activatable_widget = marqueeDelayEndButton;
         marqueeGroup.add(marqueeDelayEndRow);
 
-        // Група: Налаштування (імпорт/експорт/скидання)
         const settingsGroup = new Adw.PreferencesGroup({
             title: "Налаштування",
         });
@@ -540,7 +530,6 @@ export default class MprisLabelPreferences extends ExtensionPreferences {
                 try {
                     file = dlg.save_finish(result);
                 } catch (e) {
-                    // Користувач скасував діалог або сталася помилка вибору файлу
                     return;
                 }
                 if (!file) return;
@@ -588,7 +577,6 @@ export default class MprisLabelPreferences extends ExtensionPreferences {
                 try {
                     file = dlg.open_finish(result);
                 } catch (e) {
-                    // Користувач скасував діалог або сталася помилка вибору файлу
                     return;
                 }
                 if (!file) return;
@@ -653,16 +641,12 @@ export default class MprisLabelPreferences extends ExtensionPreferences {
             confirmDialog.present();
         });
 
-        // ==========================================
-        // СТОРІНКА 2: Прев'ю (НОВА)
-        // ==========================================
         const previewPage = new Adw.PreferencesPage({
             title: "Прев'ю",
             icon_name: "zoom-in-symbolic",
         });
         window.add(previewPage);
 
-        // Група: Анімація
         const animGroup = new Adw.PreferencesGroup({
             title: "Анімація",
         });
@@ -787,7 +771,6 @@ export default class MprisLabelPreferences extends ExtensionPreferences {
             updateSpins(selectedName);
         });
 
-        // Група: Налаштування автоприховування (таймер закриття прев'ю)
         const autocloseGroup = new Adw.PreferencesGroup({
             title: "Налаштування автоприховування",
         });
@@ -815,15 +798,9 @@ export default class MprisLabelPreferences extends ExtensionPreferences {
         delayRow.add_suffix(delayButton);
         autocloseGroup.add(delayRow);
 
-        // ==========================================
-        // СТОРІНКА 4: Керування
-        // ==========================================
         const controlsPage = getControlsPage(settings);
         window.add(controlsPage);
 
-        // ==========================================
-        // СТОРІНКА 3: Фільтри
-        // ==========================================
         const filterPage = new Adw.PreferencesPage({
             title: "Фільтри",
             icon_name: "filter-symbolic",
@@ -841,10 +818,6 @@ export default class MprisLabelPreferences extends ExtensionPreferences {
         });
         filterGroup.add(listBox);
 
-        // ==========================================
-        // Група: Очищення назв (фільтр службових позначок
-        // на кшталт "Remastered", "Live", "Deluxe Edition" тощо)
-        // ==========================================
         const cleanupGroup = new Adw.PreferencesGroup({
             title: "Очищення назв",
         });
@@ -857,8 +830,6 @@ export default class MprisLabelPreferences extends ExtensionPreferences {
             "Агресивне",
             "Власне",
         ];
-        // Порядок мусить збігатись з назвами вище — індекс дропдауна
-        // напряму мапиться на ключ пресету, що зберігається в gschema.
         const cleanupPresetKeys = [
             "off",
             "light",
@@ -885,9 +856,6 @@ export default class MprisLabelPreferences extends ExtensionPreferences {
         cleanupPresetRow.activatable_widget = cleanupPresetDropdown;
         cleanupGroup.add(cleanupPresetRow);
 
-        // Рядок вводу для пункту "Власне" — з'являється лише при
-        // виборі цього пресету, тому додається/прибирається з групи
-        // динамічно, а не просто ховається.
         const customWordsRow = new Adw.EntryRow({
             title: "Слова для видалення (через кому)",
         });
@@ -895,8 +863,7 @@ export default class MprisLabelPreferences extends ExtensionPreferences {
         const readCustomWords = () => {
             try {
                 const parsed = JSON.parse(
-                    settings.get_string("title-cleanup-custom-words") ||
-                        "[]",
+                    settings.get_string("title-cleanup-custom-words") || "[]",
                 );
                 return Array.isArray(parsed) ? parsed : [];
             } catch (e) {
@@ -918,11 +885,8 @@ export default class MprisLabelPreferences extends ExtensionPreferences {
             );
         };
 
-        // Enter у полі — миттєве збереження.
         customWordsRow.connect("apply", saveCustomWords);
 
-        // Втрата фокусу (перехід в інше поле, клік деінде) — теж
-        // зберігаємо, щоб не загубити введене, якщо Enter не натиснули.
         const customWordsFocusCtrl = new Gtk.EventControllerFocus();
         customWordsFocusCtrl.connect("leave", saveCustomWords);
         customWordsRow.add_controller(customWordsFocusCtrl);

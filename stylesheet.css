@@ -1,4 +1,3 @@
-/* Головна кнопка, яка сідає на панель */
 .mpris-indicator-main-button {
     -natural-hpadding: 0 !important;
     -minimum-hpadding: 0 !important;
@@ -7,17 +6,15 @@
     border: none !important;
 }
 
-/* ВнутрішнійBoxLayout, де лежить весь текст */
 .mpris-panel-button {
     padding: 0 !important;
     margin: 0 !important;
-    spacing: 6px; 
+    spacing: 6px;
     background-color: transparent !important;
     border: none !important;
     box-shadow: none !important;
 }
 
-/* Фікс для текстових міток та можливих скрол-контейнерів всередині розширення */
 .mpris-panel-button StLabel,
 .mpris-panel-button StBin,
 .mpris-panel-button StBoxLayout {

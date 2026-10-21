@@ -1,7 +1,3 @@
-/**
- * Pure helpers for normalizing the metadata fields used by the indicator.
- * Preserve the previous inline behavior so this extraction does not alter UI logic.
- */
 export function buildTrackKey(metadata = {}) {
     const artists = metadata["xesam:artist"];
     return JSON.stringify({

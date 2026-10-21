@@ -49,9 +49,7 @@ export const TrackLabel = GObject.registerClass(
                     try {
                         label.remove_all_transitions();
                         label.translation_x = 0;
-                    } catch (e) {
-                        // The label is already being torn down by C code.
-                    }
+                    } catch (e) {}
                 }
             });
 
@@ -72,9 +70,6 @@ export const TrackLabel = GObject.registerClass(
                     );
                 }
 
-                // Зміна пресету/власного списку фільтра не приносить нових
-                // метаданих від плеєра — тому перебудовуємо назву з
-                // останніх відомих метаданих, які кешуємо в updateFromMetadata.
                 for (const key of [
                     "title-cleanup-preset",
                     "title-cleanup-custom-words",
@@ -187,10 +182,6 @@ export const TrackLabel = GObject.registerClass(
             this.set_text(finalText);
         }
 
-        /**
-         * Вилучає з назви службові фрагменти (Remastered, Live тощо) згідно
-         * з обраним у налаштуваннях пресетом фільтра "Очищення назв".
-         */
         _applyTitleCleanup(title) {
             if (!this._settings || !title) return title;
 
@@ -220,10 +211,8 @@ export const TrackLabel = GObject.registerClass(
         set_text(text) {
             if (this._isDestroyed || !this._label) return;
 
-            // Якщо текст не змінився (або оновлюється такий самий трек), нічого не робимо
             if (this._label.get_text() === text) return;
 
-            // Зупиняємо Marquee під час анімації, щоб текст не "стрибав"
             this._stopMarquee();
 
             const currentWidth = this.width;
@@ -231,30 +220,19 @@ export const TrackLabel = GObject.registerClass(
                 this.set_width(currentWidth);
             }
 
-            // Змінюємо текст. Віджет миттєво обчислює нову природну ширину
             this._label.set_text(text);
 
-            // Обчислюємо, якої ширини контейнер має стати (з урахуванням
-            // ліміту max-width, якщо він встановлений)
             let [, textNatWidth] = this._label.get_preferred_width(-1);
             const targetWidth =
                 this._maxWidth > 0
                     ? Math.min(textNatWidth, this._maxWidth)
                     : textNatWidth;
 
-            // release=true: targetWidth тут — природний стан контейнера,
-            // тож по завершенню анімації жорстке обмеження ширини знімається
             this._animateWidth(targetWidth, true, () =>
                 this._queueMarqueeAndRelayout(),
             );
         }
 
-        /**
-         * Обчислює "природну" (бажану) ширину контейнера для поточного
-         * тексту — те саме значення, яке set_text() використовує як ціль
-         * анімації. Потрібно зовнішньому коду (SeekOverlay/indicator), щоб
-         * порівняти зі своєю потрібною шириною.
-         */
         getNaturalWidth() {
             if (!this._label || this._isDestroyed) return 0;
             const [, natWidth] = this._label.get_preferred_width(-1);
@@ -263,13 +241,6 @@ export const TrackLabel = GObject.registerClass(
                 : natWidth;
         }
 
-        /**
-         * Розширює (або звужує назад) контейнер під зовнішню вимогу
-         * мінімальної ширини — наприклад, коли таймкод SeekOverlay ширший
-         * за коротку назву треку. Ширина лишається зафіксованою на
-         * цільовому значенні до виклику restoreNaturalWidth(). Використовує
-         * ту саму 250мс EASE_OUT_QUAD-анімацію, що й set_text().
-         */
         growToFit(minWidth) {
             if (this._isDestroyed) return;
             const natural = this.getNaturalWidth();
@@ -278,35 +249,17 @@ export const TrackLabel = GObject.registerClass(
             this._animateWidth(target, false);
         }
 
-        /**
-         * Повертає контейнер до природної ширини поточного тексту тією ж
-         * анімацією — викликається, коли зовнішній вміст (таймкод), що
-         * тимчасово розширював кнопку, більше не показується.
-         */
         restoreNaturalWidth() {
             if (this._isDestroyed) return;
             this._animateWidth(this.getNaturalWidth(), true);
         }
 
-        /**
-         * Спільна анімація ширини контейнера (200мс EASE_OUT_QUAD), яку
-         * перевикористовують і set_text(), і growToFit()/restoreNaturalWidth().
-         * release=true означає, що targetWidth — "природний" стан, тож по
-         * завершенню знімається жорстке обмеження (set_width(-1));
-         * release=false лишає ширину зафіксованою (кнопку розширили під
-         * зовнішній вміст, ширший за сам текст назви).
-         */
         _animateWidth(targetWidth, release, onComplete) {
             if (this._isDestroyed) return;
 
             const currentWidth = this.width;
-            // Прибираємо лише попередній width-перехід — не чіпаємо
-            // opacity-crossfade, яким керує indicator (той самий актор
-            // одночасно бере участь і в анімації ширини, і в crossfade
-            // назва↔таймкод; remove_all_transitions() зняв би й його теж).
             this.remove_transition("width");
 
-            // Перший запуск (віджет ще не відмальовувався) — без анімації
             if (currentWidth <= 0 || !this.get_allocation_box()) {
                 this.set_width(release ? -1 : targetWidth);
                 this.queue_relayout();
@@ -314,19 +267,16 @@ export const TrackLabel = GObject.registerClass(
                 return;
             }
 
-            // Вже потрібної ширини — анімувати нічого
             if (Math.round(currentWidth) === Math.round(targetWidth)) {
                 if (release) this.set_width(-1);
                 onComplete?.();
                 return;
             }
 
-            // Жорстко фіксуємо стару ширину, не даючи контейнеру миттєво
-            // "стрибнути", і запускаємо плавну зміну ширини
             this.set_width(currentWidth);
             this.ease({
                 width: targetWidth,
-                duration: 200, // Швидкість анімації ширини
+                duration: 200,
                 mode: Clutter.AnimationMode.EASE_OUT_QUAD,
                 onComplete: () => {
                     if (this._isDestroyed) return;
@@ -386,10 +336,7 @@ export const TrackLabel = GObject.registerClass(
                 try {
                     label.remove_all_transitions();
                     label.translation_x = 0;
-                } catch (e) {
-                    // Якщо віджет уже недоступний або в процесі знищення,
-                    // просто ігноруємо помилку, оскільки він і так видаляється.
-                }
+                } catch (e) {}
             }
         }
 
@@ -501,7 +448,7 @@ export const TrackLabel = GObject.registerClass(
         }
 
         destroy() {
-            this._isDestroyed = true; // Блокуємо всі майбутні асинхронні виклики
+            this._isDestroyed = true;
             this._stopMarquee();
             if (this._settings && this._settingsIds) {
                 for (const id of this._settingsIds)

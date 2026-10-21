@@ -1,7 +1,3 @@
-/**
- * Обчислює геометрію progress layer кнопки. Значення ширини/позицій та
- * результат округлення відповідають логіці, яка раніше була в indicator.
- */
 export function calculatePanelProgressGeometry({
     width,
     height,
@@ -18,14 +14,10 @@ export function calculatePanelProgressGeometry({
     const coverWidth = hasVisibleArt
         ? Math.min(buttonWidth, Math.round(artWidth))
         : 0;
-    const coverX = hasVisibleArt
-        ? Math.max(0, Math.round(layoutX + artX))
-        : 0;
+    const coverX = hasVisibleArt ? Math.max(0, Math.round(layoutX + artX)) : 0;
     const trackX = Math.min(buttonWidth, coverX + coverWidth);
     const trackWidth = Math.max(0, buttonWidth - trackX);
-    const underlapWidth = hasVisibleArt
-        ? Math.round(coverWidth / 2)
-        : 0;
+    const underlapWidth = hasVisibleArt ? Math.round(coverWidth / 2) : 0;
 
     return {
         height: buttonHeight,
@@ -35,7 +27,6 @@ export function calculatePanelProgressGeometry({
     };
 }
 
-/** Обчислює ширину заливки; position/duration задані у мікросекундах. */
 export function calculatePanelProgressFillWidth(
     position,
     duration,
@@ -44,9 +35,10 @@ export function calculatePanelProgressFillWidth(
 ) {
     const safeDuration = Math.max(0, Number(duration) || 0);
     const safePosition = Math.max(0, Number(position) || 0);
-    const ratio = safeDuration > 0
-        ? Math.max(0, Math.min(1, safePosition / safeDuration))
-        : 0;
+    const ratio =
+        safeDuration > 0
+            ? Math.max(0, Math.min(1, safePosition / safeDuration))
+            : 0;
 
     return Math.min(
         underlapWidth + trackWidth,
@@ -54,18 +46,12 @@ export function calculatePanelProgressFillWidth(
     );
 }
 
-/** Малює заливку на St.DrawingArea; Cairo передається з GJS-модуля виклику. */
-export function paintPanelProgress(area, {
-    Cairo,
-    geometry,
-    position,
-    duration,
-    radius,
-    settings,
-}) {
+export function paintPanelProgress(
+    area,
+    { Cairo, geometry, position, duration, radius, settings },
+) {
     const cr = area.get_context();
     try {
-        // Очищаємо попередній кадр, щоб заливка могла зменшуватись.
         cr.setOperator(Cairo.Operator.CLEAR);
         cr.paint();
         cr.setOperator(Cairo.Operator.OVER);
@@ -137,7 +123,6 @@ export function paintPanelProgress(area, {
     }
 }
 
-/** Оновлює геометрію progress layer для конкретного індикатора. */
 export function updatePanelProgressGeometry(indicator) {
     if (
         indicator._isDestroyed ||
@@ -166,6 +151,5 @@ export function updatePanelProgressGeometry(indicator) {
     }
 
     indicator._panelProgressGeometry = geometry;
-    // Track прозорий — малюємо лише fill на St.DrawingArea.
     indicator._progressLayer.queue_repaint();
 }

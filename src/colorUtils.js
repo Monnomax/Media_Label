@@ -1,27 +1,30 @@
-// Чисті функції-хелпери для роботи з кольором: конвертація HSL/RGB,
-// WCAG-контраст, alpha-blending. Без залежностей від GNOME Shell —
-// легко тестувати ізольовано і перевикористовувати деінде.
-
 export function clamp01(value) {
     return Math.min(1, Math.max(0, value));
 }
 
-/**
- * RGB (0-255) → HSL (h/s/l у діапазоні 0..1).
- */
 export function rgbToHsl({ r, g, b }) {
-    r /= 255; g /= 255; b /= 255;
-    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    r /= 255;
+    g /= 255;
+    b /= 255;
+    const max = Math.max(r, g, b),
+        min = Math.min(r, g, b);
     const l = (max + min) / 2;
-    let h = 0, s = 0;
+    let h = 0,
+        s = 0;
 
     if (max !== min) {
         const d = max - min;
         s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
         switch (max) {
-            case r: h = (g - b) / d + (g < b ? 6 : 0); break;
-            case g: h = (b - r) / d + 2; break;
-            case b: h = (r - g) / d + 4; break;
+            case r:
+                h = (g - b) / d + (g < b ? 6 : 0);
+                break;
+            case g:
+                h = (b - r) / d + 2;
+                break;
+            case b:
+                h = (r - g) / d + 4;
+                break;
         }
         h /= 6;
     }
@@ -29,9 +32,6 @@ export function rgbToHsl({ r, g, b }) {
     return { h, s, l };
 }
 
-/**
- * HSL (0..1) → RGB (0-255, округлено).
- */
 export function hslToRgb(h, s, l) {
     let r, g, b;
 
@@ -61,10 +61,6 @@ export function hslToRgb(h, s, l) {
     };
 }
 
-/**
- * Гамма-коректована відносна яскравість за формулою WCAG —
- * основа для коректного (а не "на око") розрахунку контрасту.
- */
 export function relativeLuminance({ r, g, b }) {
     const toLinear = (c) => {
         c /= 255;
@@ -73,20 +69,12 @@ export function relativeLuminance({ r, g, b }) {
     return 0.2126 * toLinear(r) + 0.7152 * toLinear(g) + 0.0722 * toLinear(b);
 }
 
-/**
- * Коефіцієнт контрасту WCAG між двома яскравостями (1:1 .. 21:1).
- */
 export function contrastRatio(l1, l2) {
     const lighter = Math.max(l1, l2);
     const darker = Math.min(l1, l2);
     return (lighter + 0.05) / (darker + 0.05);
 }
 
-/**
- * Змішує колір переднього плану з фоном за формулою alpha-blending —
- * саме така суміш і видима користувачу, коли напівпрозорий колір
- * кнопки лежить поверх фону панелі.
- */
 export function blendOverPanel(fgColor, alpha, panelBg) {
     return {
         r: fgColor.r * alpha + panelBg.r * (1 - alpha),

@@ -20,35 +20,28 @@ export const CairoRoundedArt = GObject.registerClass(
                 track_hover: true,
             });
 
-            // Стартова висота: якщо кнопка індикатора вже має реальну висоту
-            // (рідко на цьому етапі — вона ще не вставлена в панель), беремо її,
-            // інакше — безпечний дефолт, який одразу синхронізується після
-            // першого allocate() кнопки через setTargetHeight().
             const initialHeight = Math.round(
                 indicator && indicator.height > 0 ? indicator.height : 40,
             );
 
-            this._targetHeight = initialHeight; // актуальна висота кнопки на панелі
+            this._targetHeight = initialHeight;
             this._width = initialHeight;
             this._height = initialHeight;
             this.set_size(this._width, this._height);
 
             this._radius = radius;
             this._indicator = indicator;
-            this._pixbuf = null; // відмасштабований під поточний розмір pixbuf (для відмальовки)
-            this._fullPixbuf = null; // оригінал у повній роздільній здатності (для якісного перемасштабування)
+            this._pixbuf = null;
+            this._fullPixbuf = null;
             this._avgColor = null;
             this._isDestroyed = false;
 
-            // --- Crossfade між старою і новою обкладинкою ---
-            this._lastArtUrl = undefined; // щоб не перезапускати fade при тій самій обкладинці
-            this._oldPixbuf = null; // шар, що згасає (те, що було показано до зміни)
-            this._crossfadeProgress = 1; // 0 = щойно почали перехід, 1 = перехід завершено
+            this._lastArtUrl = undefined;
+            this._oldPixbuf = null;
+            this._crossfadeProgress = 1;
             this._crossfadeTimerId = null;
-            this._crossfadeDuration = 400; // змінено на 400 мс
+            this._crossfadeDuration = 400;
 
-            // artLabel залишається окремою інтерактивною зоною: кліки та
-            // прокрутка тут не запускають керування треком на решті кнопки.
             this.connect("button-press-event", () => Clutter.EVENT_STOP);
 
             this.connect("button-release-event", (_actor, event) => {
@@ -68,7 +61,11 @@ export const CairoRoundedArt = GObject.registerClass(
                         });
                     };
 
-                    resolvePreviewArtworkUrl(indicator, mprisArtUrl, openPreview);
+                    resolvePreviewArtworkUrl(
+                        indicator,
+                        mprisArtUrl,
+                        openPreview,
+                    );
                 }
 
                 return Clutter.EVENT_STOP;
@@ -76,18 +73,11 @@ export const CairoRoundedArt = GObject.registerClass(
 
             this.connect("scroll-event", () => Clutter.EVENT_STOP);
 
-            // Захист від «зомбі»-таймера: якщо актор знищили посеред анімації,
-            // GLib.timeout_add інакше продовжить смикати вже знищений DrawingArea.
             this.connect("destroy", () => {
                 this._isDestroyed = true;
                 this._stopCrossfadeTimer();
             });
         }
-
-        /**
-         * Запускає плавний перехід від поточної обкладинки до нової.
-         * newFullPixbuf === null означає перехід до плейсхолдера (трек без art).
-         */
 
         vfunc_get_preferred_width(forHeight) {
             return [this._width, this._width];
@@ -111,15 +101,6 @@ export const CairoRoundedArt = GObject.registerClass(
             }
         }
 
-        /**
-         * Викликається ззовні (з MediaPlayerIndicator) щоразу, коли реальна
-         * висота кнопки на панелі змінюється — наприклад, користувач збільшив
-         * висоту панелі через тему чи інше розширення.
-         *
-         * artLabel синхронно підлаштовує власну висоту під висоту кнопки,
-         * перераховуючи ширину так, щоб зберегти співвідношення сторін
-         * поточної обкладинки (або лишитись квадратом, якщо обкладинки нема).
-         */
         setTargetHeight(height) {
             height = Math.round(height);
             if (!height || height <= 0 || height === this._targetHeight) return;
@@ -128,10 +109,6 @@ export const CairoRoundedArt = GObject.registerClass(
         }
 
         _rescaleToTarget() {
-            // Зміна висоти панелі під час активного crossfade — рідкісна подія.
-            // Замість того щоб домасштабовувати ще й «старий» шар під нову висоту,
-            // просто завершуємо перехід миттєво: різкий стрибок тут непомітний
-            // і не вартий додаткової складності.
             if (this._crossfadeTimerId) {
                 this._stopCrossfadeTimer();
                 this._oldPixbuf = null;
@@ -141,7 +118,6 @@ export const CairoRoundedArt = GObject.registerClass(
             const targetHeight = this._targetHeight;
 
             if (!this._fullPixbuf) {
-                // Немає обкладинки — квадратний плейсхолдер під актуальну висоту кнопки
                 this._pixbuf = null;
                 this._resizeTo(targetHeight, targetHeight);
                 this.queue_repaint();
@@ -151,9 +127,6 @@ export const CairoRoundedArt = GObject.registerClass(
             const origWidth = this._fullPixbuf.get_width();
             const origHeight = this._fullPixbuf.get_height();
 
-            // Підганяємо під висоту кнопки; ширина слідує за реальними
-            // пропорціями обкладинки: квадратна art лишається квадратом,
-            // вертикальний постер лишається вертикальним постером — без обрізки.
             const scale = targetHeight / origHeight;
             const scaledWidth = Math.max(1, Math.round(origWidth * scale));
 
@@ -170,9 +143,6 @@ export const CairoRoundedArt = GObject.registerClass(
         async updateArt(artUrl, radius) {
             this._radius = radius;
 
-            // Метадані MPRIS оновлюються частіше, ніж сама обкладинка
-            // (play/pause теж шле g-properties-changed). Якщо URL той самий —
-            // нічого не вантажимо і fade повторно не запускаємо.
             if (artUrl === this._lastArtUrl) {
                 this.queue_repaint();
                 return;
@@ -214,20 +184,14 @@ export const CairoRoundedArt = GObject.registerClass(
             }
         }
 
-        /**
-         * Запускає плавний перехід від поточної обкладинки до нової.
-         * newFullPixbuf === null означає перехід до плейсхолдера (трек без art).
-         */
         _beginCrossfade(newFullPixbuf) {
             this._stopCrossfadeTimer();
 
             this._oldPixbuf = this._pixbuf;
             this._fullPixbuf = newFullPixbuf;
 
-            // 1. Встановлюємо точку масштабування рівно по центру віджета
             this.set_pivot_point(0.5, 0.5);
 
-            // 2. Знімаємо обмеження малювання з самого віджета та його контейнера
             this.set_clip_to_allocation(false);
             if (this.get_parent()) {
                 this.get_parent().set_clip_to_allocation(false);
@@ -261,7 +225,6 @@ export const CairoRoundedArt = GObject.registerClass(
             const duration = this._crossfadeDuration;
             let startTime = null;
 
-            // 3. Апаратна анімація Clutter: віджет збільшується, виходячи за свої межі, і повертається назад
             this.ease({
                 scale_x: 1.1,
                 scale_y: 1.1,
@@ -277,7 +240,6 @@ export const CairoRoundedArt = GObject.registerClass(
                 },
             });
 
-            // 4. Таймер для Cairo відповідає ТІЛЬКИ за прозорість (crossfade)
             this._crossfadeTimerId = GLib.timeout_add(
                 GLib.PRIORITY_DEFAULT,
                 16,
@@ -317,7 +279,6 @@ export const CairoRoundedArt = GObject.registerClass(
             const isCrossfading =
                 this._oldPixbuf && this._crossfadeProgress < 1;
 
-            // Якщо йде анімація, розширюємо межі малювання на 10% (відповідно до scale 1.1)
             if (res && isCrossfading) {
                 let marginX = this.width * 0.1;
                 let marginY = this.height * 0.1;
@@ -343,8 +304,6 @@ export const CairoRoundedArt = GObject.registerClass(
                 this._oldPixbuf && this._crossfadeProgress < 1;
 
             if (isCrossfading) {
-                // Оскільки масштабування тепер винесене на рівень Clutter-актора,
-                // тут ми керуємо лише переходом прозорості.
                 this._paintLayer(
                     cr,
                     this._oldPixbuf,
@@ -366,14 +325,11 @@ export const CairoRoundedArt = GObject.registerClass(
             cr.$dispose();
         }
 
-        // Малює один шар (картинку або плейсхолдер) із заданою прозорістю.
-        // Область вже обмежена round-rect клипом у vfunc_repaint().
         _paintLayer(cr, pixbuf, width, height, alpha) {
             if (alpha <= 0) return;
 
             cr.save();
 
-            // Задаємо круглий контур обрізки для поточного шару
             let r = Math.min(this._radius, width / 2, height / 2);
             cr.newSubPath();
             cr.arc(width - r, r, r, -Math.PI / 2, 0);
