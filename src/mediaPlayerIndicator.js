@@ -1,4 +1,3 @@
-import * as Main from "resource:///org/gnome/shell/ui/main.js";
 import * as PanelMenu from "resource:///org/gnome/shell/ui/panelMenu.js";
 import * as PopupMenu from "resource:///org/gnome/shell/ui/popupMenu.js";
 import St from "gi://St";
@@ -6,7 +5,6 @@ import Clutter from "gi://Clutter";
 import Cairo from "gi://cairo";
 import GObject from "gi://GObject";
 import GLib from "gi://GLib";
-import Gio from "gi://Gio";
 import { TrackLabel } from "./textLabel.js";
 import { CairoRoundedArt } from "./artLabel.js";
 import { SeekOverlay } from "./seekOverlay.js";
