@@ -22,15 +22,6 @@ export function updateMetadata() {
             ? metadataVariant.recursiveUnpack()
             : metadataVariant.deep_unpack();
 
-        this.trackLabel.updateFromMetadata(metadata);
-
-        const appId = this._playerManager.getAppIdentifier(
-            this._currentPlayerAddress,
-        );
-        if (this._detailedWindow) {
-            this._detailedWindow.updateInfo(metadata, appId);
-        }
-
         const trackKey = buildTrackKey(metadata);
 
         if (
@@ -41,6 +32,16 @@ export function updateMetadata() {
             this._panelProgressPosition = 0;
         }
         this._currentTrackKey = trackKey;
+
+        this.trackLabel.updateFromMetadata(metadata);
+
+        const appId = this._playerManager.getAppIdentifier(
+            this._currentPlayerAddress,
+        );
+        if (this._detailedWindow) {
+            this._detailedWindow.updateInfo(metadata, appId);
+        }
+
 
         this._seekLength = getTrackLength(metadata);
         this._updatePanelProgressFill(

@@ -61,7 +61,22 @@ export function paintPanelProgress(
         const height = Math.max(0, Math.round(area.height));
         if (height <= 0) return;
 
-        const { trackX, trackWidth, underlapWidth } = geometry;
+        // Align the progress fill with the allocated DrawingArea width.
+        const rawDrawingWidth = Number(area.width);
+        const drawingWidth = Math.max(
+            0,
+            Math.round(
+                Number.isFinite(rawDrawingWidth)
+                    ? rawDrawingWidth
+                    : geometry.trackX + geometry.trackWidth,
+            ),
+        );
+        const trackX = Math.min(
+            Math.max(0, Math.round(geometry.trackX)),
+            drawingWidth,
+        );
+        const trackWidth = Math.max(0, drawingWidth - trackX);
+        const { underlapWidth } = geometry;
         const fillWidth = calculatePanelProgressFillWidth(
             position,
             duration,
