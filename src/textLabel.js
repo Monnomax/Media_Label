@@ -3,6 +3,8 @@ import Clutter from "gi://Clutter";
 import GObject from "gi://GObject";
 import Pango from "gi://Pango";
 import GLib from "gi://GLib";
+import { TextFadeEffect } from "./textFadeEffect.js";
+import { getTextFadeState } from "./textFadeGeometry.js";
 import { cleanTrackTitle, getCleanupWordsForPreset } from "./titleCleanup.js";
 
 export const TrackLabel = GObject.registerClass(
@@ -29,11 +31,34 @@ export const TrackLabel = GObject.registerClass(
             this._label.clutter_text.ellipsize = Pango.EllipsizeMode.NONE;
             this.add_child(this._label);
 
+            // Маска застосовується до контейнера тексту, а не до всієї кнопки.
+            this._fadeEffect = null;
+            try {
+                this._fadeEffect = new TextFadeEffect();
+                this._fadeEffect.set_enabled(false);
+                this.add_effect(this._fadeEffect);
+            } catch (e) {
+                console.warn(`Media Label: text fade shader unavailable: ${e.message}`);
+                this._fadeEffect = null;
+            }
+
+            this._labelTranslationNotifyId = this._label.connect(
+                "notify::translation-x",
+                () => this._updateFadeMask(),
+            );
+
             this.connect("destroy", () => {
                 this._isDestroyed = true;
                 this._settingsIds = [];
 
                 const label = this._label;
+                if (label && this._labelTranslationNotifyId) {
+                    try {
+                        label.disconnect(this._labelTranslationNotifyId);
+                    } catch (e) {}
+                }
+                this._labelTranslationNotifyId = 0;
+                this._destroyFadeEffect();
                 this._label = null;
 
                 if (this._scrollTimeoutId) {
@@ -340,6 +365,51 @@ export const TrackLabel = GObject.registerClass(
             }
         }
 
+        _updateFadeMask() {
+            if (this._isDestroyed || !this._label || !this._fadeEffect) return;
+
+            let containerWidth = this.width;
+            if (
+                this._maxWidth > 0 &&
+                (containerWidth <= 0 || containerWidth > this._maxWidth)
+            ) {
+                containerWidth = this._maxWidth;
+            }
+
+            if (containerWidth <= 0) {
+                this._fadeEffect.setFade(false, false);
+                return;
+            }
+
+            let textWidth;
+            try {
+                [, textWidth] = this._label.get_preferred_width(-1);
+            } catch (e) {
+                return;
+            }
+
+            const state = getTextFadeState(
+                this._label.translation_x,
+                textWidth,
+                containerWidth,
+            );
+            this._fadeEffect.setFade(state.left, state.right);
+        }
+
+        _destroyFadeEffect() {
+            const effect = this._fadeEffect;
+            this._fadeEffect = null;
+            if (!effect) return;
+
+            try {
+                effect.stopAnimation();
+            } catch (e) {}
+
+            try {
+                this.remove_effect(effect);
+            } catch (e) {}
+        }
+
         _setupMarquee() {
             if (this._isDestroyed) return;
             this._stopMarquee();
@@ -362,10 +432,12 @@ export const TrackLabel = GObject.registerClass(
             }
 
             if (textWidth <= containerWidth) {
+                this._updateFadeMask();
                 return;
             }
 
             let diff = textWidth - containerWidth;
+            this._updateFadeMask();
             const SPEED_PX_PER_SEC = this._settings
                 ? this._settings.get_int("marquee-speed")
                 : 60;
@@ -455,6 +527,13 @@ export const TrackLabel = GObject.registerClass(
                     this._settings.disconnect(id);
                 this._settingsIds = [];
             }
+            if (this._label && this._labelTranslationNotifyId) {
+                try {
+                    this._label.disconnect(this._labelTranslationNotifyId);
+                } catch (e) {}
+            }
+            this._labelTranslationNotifyId = 0;
+            this._destroyFadeEffect();
             this._label = null;
             super.destroy();
         }
