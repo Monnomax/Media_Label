@@ -1,5 +1,7 @@
 import Gio from "gi://Gio";
 import GLib from "gi://GLib";
+import Shell from "gi://Shell";
+import { matchesFocusedApplication } from "./focusedPlayerMatcher.js";
 import { MPRIS_INTERFACE, DBUS_INTERFACE } from "./dbusInterfaces.js";
 
 export class MprisPlayerManager {
@@ -9,6 +11,14 @@ export class MprisPlayerManager {
         this._isDestroyed = false;
         this._players = new Map();
         this._nameOwnerChangedSignalId = null;
+        this._focusedPlayerAddress = null;
+        this._focusSyncIdleId = null;
+
+        this._windowTracker = Shell.WindowTracker.get_default();
+        this._focusAppChangedSignalId = this._windowTracker.connect(
+            "notify::focus-app",
+            () => this._scheduleFocusSync(),
+        );
 
         this._initDBus();
     }
@@ -48,6 +58,7 @@ export class MprisPlayerManager {
         const entry = {
             proxy: null,
             propId: null,
+            identity: "",
             lastActive: GLib.get_monotonic_time(),
         };
         this._players.set(address, entry);
@@ -62,6 +73,16 @@ export class MprisPlayerManager {
 
                 entry.lastActive = GLib.get_monotonic_time();
 
+                // Prefer the player belonging to the focused application,
+                // regardless of which player most recently emitted a change.
+                this._focusedPlayerAddress = this._findFocusedPlayerAddress();
+                if (this._focusedPlayerAddress) {
+                    if (this._focusedPlayerAddress === address)
+                        this._activate(address);
+                    else this._delegate.refreshVisibility();
+                    return;
+                }
+
                 const activeAddress = this._delegate.getActiveAddress();
                 if (!activeAddress || entry.proxy.PlaybackStatus === "Playing")
                     this._activate(address);
@@ -71,6 +92,14 @@ export class MprisPlayerManager {
 
         entry.propId = entry.proxy.connect("g-properties-changed", () => {
             entry.lastActive = GLib.get_monotonic_time();
+
+            if (this._focusedPlayerAddress) {
+                if (this._focusedPlayerAddress === address)
+                    this._activate(address);
+                else this._delegate.refreshVisibility();
+                return;
+            }
+
             this._activate(address);
         });
     }
@@ -82,11 +111,95 @@ export class MprisPlayerManager {
         if (entry.propId && entry.proxy) entry.proxy.disconnect(entry.propId);
         this._players.delete(address);
 
-        if (this._delegate.getActiveAddress() !== address) return;
+        const wasActive = this._delegate.getActiveAddress() === address;
+        this._focusedPlayerAddress = this._findFocusedPlayerAddress();
+
+        if (this._focusedPlayerAddress) {
+            if (this._delegate.getActiveAddress() !== this._focusedPlayerAddress)
+                this._activate(this._focusedPlayerAddress);
+            return;
+        }
+        if (!wasActive) return;
 
         const next = this._pickNextActivePlayer();
         if (next) this._activate(next);
         else this._delegate.clearActivePlayer();
+    }
+
+    _scheduleFocusSync() {
+        if (this._isDestroyed || this._focusSyncIdleId) return;
+
+        // Coalesce transient focus-app changes emitted during one focus switch.
+        this._focusSyncIdleId = GLib.idle_add(
+            GLib.PRIORITY_DEFAULT_IDLE,
+            () => {
+                this._focusSyncIdleId = null;
+                if (!this._isDestroyed) this._syncFocusedPlayer();
+                return GLib.SOURCE_REMOVE;
+            },
+        );
+    }
+
+    _findFocusedPlayerAddress() {
+        const focusedAppId = this._windowTracker?.focus_app?.id;
+        if (!focusedAppId) return null;
+
+        let playingCandidate = null;
+        let playingTime = -1;
+        let anyCandidate = null;
+        let anyTime = -1;
+
+        for (const [address, entry] of this._players) {
+            if (
+                !entry.proxy ||
+                !matchesFocusedApplication(
+                    focusedAppId,
+                    address,
+                    entry.identity,
+                )
+            )
+                continue;
+
+            if (entry.lastActive > anyTime) {
+                anyTime = entry.lastActive;
+                anyCandidate = address;
+            }
+
+            if (
+                entry.proxy.PlaybackStatus === "Playing" &&
+                entry.lastActive > playingTime
+            ) {
+                playingTime = entry.lastActive;
+                playingCandidate = address;
+            }
+        }
+
+        return playingCandidate || anyCandidate;
+    }
+
+    _syncFocusedPlayer() {
+        if (this._isDestroyed) return;
+
+        const previousFocusedAddress = this._focusedPlayerAddress;
+        this._focusedPlayerAddress = this._findFocusedPlayerAddress();
+
+        if (this._focusedPlayerAddress) {
+            if (
+                this._delegate.getActiveAddress() !==
+                this._focusedPlayerAddress
+            )
+                this._activate(this._focusedPlayerAddress);
+            return;
+        }
+
+        // If focus moved to a non-player window, return to the normal MPRIS
+        // selection policy rather than leaving a stale focus lock in place.
+        if (previousFocusedAddress) {
+            const next = this._pickNextActivePlayer();
+            if (next) this._activate(next);
+            else if (this._delegate.getActiveAddress())
+                this._delegate.clearActivePlayer();
+        }
     }
 
     _pickNextActivePlayer() {
@@ -154,6 +267,9 @@ export class MprisPlayerManager {
                 let [variant] = result.recursiveUnpack();
                 identity = variant;
             }
+
+            const entry = this._players.get(address);
+            if (entry) entry.identity = String(identity ?? "");
 
             let players = JSON.parse(
                 this._settings.get_string("media-players"),
@@ -235,6 +351,18 @@ export class MprisPlayerManager {
     destroy() {
         if (this._isDestroyed) return;
         this._isDestroyed = true;
+
+        if (this._focusSyncIdleId) {
+            GLib.source_remove(this._focusSyncIdleId);
+            this._focusSyncIdleId = null;
+        }
+
+        if (this._windowTracker && this._focusAppChangedSignalId) {
+            this._windowTracker.disconnect(this._focusAppChangedSignalId);
+            this._focusAppChangedSignalId = null;
+        }
+        this._windowTracker = null;
+        this._focusedPlayerAddress = null;
 
         if (this.dBusProxy && this._nameOwnerChangedSignalId) {
             this.dBusProxy.disconnectSignal(this._nameOwnerChangedSignalId);
